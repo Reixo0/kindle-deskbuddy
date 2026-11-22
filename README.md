@@ -19,7 +19,7 @@ A lightweight, landscape e-ink **Spotify controller + desk clock** for a jailbro
 Clone the repository onto your Raspberry Pi and create a Python virtual environment:
 
 ```bash
-git clone <your-repo-url> kindle-deskbuddy
+git clone https://github.com/Reixo0/kindle-deskbuddy.git kindle-deskbuddy
 cd kindle-deskbuddy
 python3 -m venv .venv
 ```
@@ -154,3 +154,36 @@ Run the built-in touch test over SSH:
 sh /mnt/us/deskbuddy/deskbuddy.sh --test-touch
 ```
 Tap the four corners of the screen. If your digitizer reports raw coordinates (e.g. `0..4095` instead of `0..600`), set `TOUCH_MAX_X`, `TOUCH_MAX_Y`, `TOUCH_SWAP_XY`, `TOUCH_INVERT_X`, or `TOUCH_INVERT_Y` in `/mnt/us/deskbuddy/deskbuddy.conf`.
+
+---
+
+## 4. Updating & Uninstalling
+
+### Updating on the Raspberry Pi
+```bash
+cd ~/kindle-deskbuddy
+git pull
+```
+Then restart `uvicorn` (or `sudo systemctl restart kindle-deskbuddy` if using `systemd`). Your `.env` and `.spotify_cache` are ignored by Git and stay intact.
+
+### Removing / Reinstalling on the Raspberry Pi
+If you want a fresh clone or want to completely uninstall Desk Buddy from your Pi:
+
+```bash
+# 1. Stop and remove the systemd service (if you created one)
+sudo systemctl disable --now kindle-deskbuddy 2>/dev/null || true
+sudo rm -f /etc/systemd/system/kindle-deskbuddy.service
+sudo systemctl daemon-reload
+
+# 2. (Optional) Back up your Spotify config & login token if you plan to reinstall
+cp ~/kindle-deskbuddy/.env ~/deskbuddy.env.bak 2>/dev/null || true
+cp ~/kindle-deskbuddy/.spotify_cache ~/deskbuddy.spotify_cache.bak 2>/dev/null || true
+
+# 3. Delete the project folder (including .venv)
+rm -rf ~/kindle-deskbuddy
+```
+*(If reinstalling, copy `~/deskbuddy.env.bak` and `~/deskbuddy.spotify_cache.bak` back into the new `~/kindle-deskbuddy/` folder as `.env` and `.spotify_cache` so you don't have to re-authorize Spotify.)*
+
+### Removing from the Kindle
+Delete the `deskbuddy` folder and `documents/DeskBuddy.sh` over USB (or via SSH: `rm -rf /mnt/us/deskbuddy /mnt/us/documents/DeskBuddy.sh`).
+
