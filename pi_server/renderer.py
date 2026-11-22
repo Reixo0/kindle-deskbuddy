@@ -401,10 +401,15 @@ class DeskBuddyRenderer:
             add_box(*box, "nav", view=mode.value)
             cur_x += bw + s(10)
 
-        # Right side: Battery + Clock
+        # Right side: Exit button + Battery + Clock
         cy = top_h // 2
+        exit_w = s(38)
+        exit_box = (w - s(12) - exit_w, btn_y1, w - s(12), btn_y2)
+        self._draw_pill_button(draw, exit_box, "X", font, active=False, radius=s(7))
+        add_box(*exit_box, "exit")
+
         left_of_batt = self._draw_battery(
-            draw, w - s(16), cy, state.kindle_battery, state.kindle_charging, s
+            draw, exit_box[0] - s(12), cy, state.kindle_battery, state.kindle_charging, s
         )
         clock_str = _format_clock(self.settings.time_format)
         clock_font = self.fonts.get(s(22), bold=True)
@@ -626,15 +631,19 @@ class DeskBuddyRenderer:
         s,
         add_box,
     ) -> None:
-        # Clean header: Date on left, Devices + Battery on right
+        # Clean header: Date on left, Devices + Battery + Exit on right
         header_y = s(28)
         date_font = self.fonts.get(s(22), bold=True)
         draw.text((s(24), header_y), _format_date(), font=date_font, fill=BLACK, anchor="lm")
 
-        left_of_batt = self._draw_battery(
-            draw, w - s(24), header_y, state.kindle_battery, state.kindle_charging, s
-        )
         dev_btn_font = self.fonts.get(s(15), bold=True)
+        exit_box = (w - s(20) - s(38), s(10), w - s(20), s(46))
+        self._draw_pill_button(draw, exit_box, "X", dev_btn_font, active=False, radius=s(7))
+        add_box(*exit_box, "exit")
+
+        left_of_batt = self._draw_battery(
+            draw, exit_box[0] - s(12), header_y, state.kindle_battery, state.kindle_charging, s
+        )
         dev_box = (left_of_batt - s(108), s(10), left_of_batt - s(14), s(46))
         self._draw_pill_button(draw, dev_box, "Devices", dev_btn_font, active=False, radius=s(7))
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)

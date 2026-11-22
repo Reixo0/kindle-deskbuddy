@@ -11,33 +11,85 @@ CONF_FILE="$SCRIPT_DIR/deskbuddy.conf"
 PI_URL="${PI_URL:-http://192.168.1.50:8765}"
 ROTATION="${ROTATION:-90}"
 FULL_REFRESH_EVERY="${FULL_REFRESH_EVERY:-15}"
-PAUSE_KINDLE_UI="${PAUSE_KINDLE_UI:-1}"
+PAUSE_KINDLE_UI="${PAUSE_KINDLE_UI:-0}"
 TOUCH_DEV="${TOUCH_DEV:-}"
+
+LOG_FILE="$SCRIPT_DIR/deskbuddy.log"
+: > "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/deskbuddy.log"
+log() {
+    echo "$(date '+%H:%M:%S') $*" >> "$LOG_FILE" 2>/dev/null || true
+}
+log "Starting Desk Buddy | PI_URL=$PI_URL ROTATION=$ROTATION PAUSE_KINDLE_UI=$PAUSE_KINDLE_UI"
 
 TMP_DIR="/tmp/deskbuddy"
 mkdir -p "$TMP_DIR"
 IMG_FILE="$TMP_DIR/screen.png"
 HDR_FILE="$TMP_DIR/headers.txt"
 PID_FILE="$TMP_DIR/deskbuddy.pid"
-WAKE_FIFO="$TMP_DIR/wake.fifo"
+DIRTY_FLAG="$TMP_DIR/dirty"
+EXIT_FLAG="$TMP_DIR/exit"
 
 # Locate fbink binary (PATH or common jailbreak / KOReader locations)
 FBINK=""
 for candidate in "$(command -v fbink 2>/dev/null || true)" \
     /usr/local/bin/fbink \
     /mnt/us/bin/fbink \
-    /mnt/us/koreader/fbink \
-    /mnt/us/linkss/bin/fbink; do
+    /mnt/us/linkss/bin/fbink \
+    /mnt/us/koreader/fbink; do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then
         FBINK="$candidate"
         break
     fi
 done
 
-if [ -z "$FBINK" ]; then
-    echo "ERROR: fbink not found. Please install fbink or check PATH." >&2
+EIPS=""
+for candidate in "$(command -v eips 2>/dev/null || true)" /usr/sbin/eips /usr/bin/eips; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        EIPS="$candidate"
+        break
+    fi
+done
+
+if [ -z "$FBINK" ] && [ -z "$EIPS" ]; then
+    echo "ERROR: Neither fbink nor eips found." >&2
     exit 1
 fi
+
+# Image renderer backend: prefer built-in eips when available (KOReader's fbink lacks image support)
+if [ -n "$EIPS" ]; then
+    IMAGE_BACKEND="eips"
+else
+    IMAGE_BACKEND="fbink"
+fi
+
+draw_image() {
+    FILE="$1"
+    FULL="$2"
+    if [ "$IMAGE_BACKEND" = "fbink" ]; then
+        if [ "$FULL" = "1" ]; then
+            "$FBINK" -q -f -g "file=${FILE}" 2>>"$LOG_FILE" && return 0
+        else
+            "$FBINK" -q -g "file=${FILE}" 2>>"$LOG_FILE" && return 0
+        fi
+        if [ -n "$EIPS" ]; then
+            log "fbink -g unsupported; switching permanently to built-in eips ($EIPS)"
+            IMAGE_BACKEND="eips"
+        else
+            log "fbink -g failed and eips not found"
+            return 1
+        fi
+    fi
+    if [ "$IMAGE_BACKEND" = "eips" ] && [ -n "$EIPS" ]; then
+        if [ "$FULL" = "1" ]; then
+            "$EIPS" -f -g "$FILE" 2>>"$LOG_FILE" && return 0
+        else
+            "$EIPS" -g "$FILE" 2>>"$LOG_FILE" && return 0
+        fi
+        log "eips -g failed ($?)"
+        return 1
+    fi
+    return 1
+}
 
 # Auto-detect framebuffer resolution via fbink -e
 FB_W="600"
@@ -103,22 +155,23 @@ read_battery() {
 http_get_screen() {
     URL="$1"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsS --max-time 8 -D "$HDR_FILE" -o "$IMG_FILE.tmp" "$URL" 2>/dev/null
+        curl -fsS --max-time 8 -D "$HDR_FILE" -o "$IMG_FILE.tmp" "$URL" 2>>"$LOG_FILE"
         return $?
     elif command -v wget >/dev/null 2>&1; then
         : > "$HDR_FILE"
-        wget -q -T 8 -O "$IMG_FILE.tmp" "$URL" 2>/dev/null
+        wget -q -T 8 -O "$IMG_FILE.tmp" "$URL" 2>>"$LOG_FILE"
         return $?
     fi
+    log "ERROR: neither curl nor wget found"
     return 1
 }
 
 http_send_tap() {
     URL="$1"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsS --max-time 5 "$URL" >/dev/null 2>&1
+        curl -fsS --max-time 5 "$URL" 2>/dev/null || true
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -T 5 -O /dev/null "$URL" >/dev/null 2>&1
+        wget -q -T 5 -O - "$URL" 2>/dev/null || true
     fi
 }
 
@@ -134,8 +187,13 @@ cleanup() {
     if command -v lipc-set-prop >/dev/null 2>&1; then
         lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null || true
     fi
-    rm -f "$PID_FILE" "$WAKE_FIFO" "$IMG_FILE.tmp"
-    "$FBINK" -q -c -f 2>/dev/null || true
+    rm -f "$PID_FILE" "$DIRTY_FLAG" "$EXIT_FLAG" "$IMG_FILE.tmp"
+    if [ -n "$EIPS" ]; then
+        "$EIPS" -c 2>/dev/null || true
+    elif [ -n "$FBINK" ]; then
+        "$FBINK" -q -c -f 2>/dev/null || true
+    fi
+    log "Desk Buddy exited cleanly"
 }
 trap cleanup EXIT INT TERM
 
@@ -153,14 +211,12 @@ if [ "$PAUSE_KINDLE_UI" = "1" ]; then
     done
 fi
 
-"$FBINK" -q -c -f 2>/dev/null || true
+log "Detected FB=${FB_W}x${FB_H} FBINK=${FBINK:-none} EIPS=${EIPS:-none}"
+rm -f "$DIRTY_FLAG" "$EXIT_FLAG"
 
-rm -f "$WAKE_FIFO"
-mkfifo "$WAKE_FIFO"
-
-# Background touch listener: forwards taps to Pi and nudges the render loop
-export TOUCH_MAX_X="${TOUCH_MAX_X:-$FB_W}"
-export TOUCH_MAX_Y="${TOUCH_MAX_Y:-$FB_H}"
+# Background touch listener: forwards taps to Pi and sets DIRTY_FLAG for immediate redraw
+export TOUCH_MAX_X="${TOUCH_MAX_X:-0}"
+export TOUCH_MAX_Y="${TOUCH_MAX_Y:-0}"
 export TOUCH_SWAP_XY="${TOUCH_SWAP_XY:-0}"
 export TOUCH_INVERT_X="${TOUCH_INVERT_X:-0}"
 export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
@@ -168,7 +224,7 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
 (
     CORNER_TAPS=0
     CORNER_START=0
-    sh "$SCRIPT_DIR/touch_reader.sh" "$TOUCH_DEV" "$FB_W" "$FB_H" | while read -r TX TY; do
+    sh "$SCRIPT_DIR/touch_reader.sh" "$TOUCH_DEV" "$FB_W" "$FB_H" 2>>"$LOG_FILE" | while read -r TX TY; do
         [ -z "$TX" ] && continue
 
         # Secret exit gesture: 4 quick taps in the native top-left 60x60 corner within 4 seconds
@@ -181,26 +237,30 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
                 CORNER_TAPS=$((CORNER_TAPS + 1))
             fi
             if [ "$CORNER_TAPS" -ge 4 ]; then
-                echo "exit" > "$WAKE_FIFO"
+                : > "$EXIT_FLAG"
                 break
             fi
         fi
 
         read_battery
-        http_send_tap "${PI_URL}/api/tap?x=${TX}&y=${TY}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}"
-        echo "tap" > "$WAKE_FIFO"
+        RESP="$(http_send_tap "${PI_URL}/api/tap?x=${TX}&y=${TY}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}")"
+        if echo "$RESP" | grep -q '"exit": *true'; then
+            log "Exit button tapped"
+            : > "$EXIT_FLAG"
+            break
+        fi
+        : > "$DIRTY_FLAG"
     done
 ) &
 TOUCH_PID="$!"
 
 LAST_HASH=""
 PARTIAL_COUNT=0
-POLL_SEC=15
+POLL_SEC=10
+HAS_USLEEP="0"
+command -v usleep >/dev/null 2>&1 && HAS_USLEEP="1"
 
-# Open FIFO read-write on FD 3 so timed reads don't block on EOF
-exec 3<>"$WAKE_FIFO"
-
-while true; do
+while [ ! -f "$EXIT_FLAG" ]; do
     read_battery
     SCREEN_URL="${PI_URL}/api/screen.png?w=${FB_W}&h=${FB_H}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}"
 
@@ -216,23 +276,39 @@ while true; do
             PARTIAL_COUNT=$((PARTIAL_COUNT + 1))
             if [ "$REFRESH_HINT" = "full" ] || [ "$PARTIAL_COUNT" -ge "$FULL_REFRESH_EVERY" ]; then
                 PARTIAL_COUNT=0
-                "$FBINK" -q -f -g "file=${IMG_FILE},w=-1,h=-1" 2>/dev/null || true
+                draw_image "$IMG_FILE" 1 || true
             else
-                "$FBINK" -q -g "file=${IMG_FILE},w=-1,h=-1" 2>/dev/null || true
+                draw_image "$IMG_FILE" 0 || true
             fi
         fi
     else
-        "$FBINK" -q -y 2 "Desk Buddy: Waiting for Pi at ${PI_URL}..." 2>/dev/null || true
+        log "HTTP fetch failed for $SCREEN_URL"
         POLL_SEC=10
     fi
 
-    # Wait up to POLL_SEC seconds, waking immediately on any touch event
-    EVENT=""
-    if read -r -t "$POLL_SEC" EVENT <&3 2>/dev/null; then
-        if [ "$EVENT" = "exit" ]; then
-            break
-        fi
-        # Drain any queued burst events
-        while read -r -t 0 _ <&3 2>/dev/null; do :; done
+    # Wait up to POLL_SEC seconds, waking immediately (<250ms) on any touch event
+    if [ "$HAS_USLEEP" = "1" ]; then
+        TICKS=$((POLL_SEC * 4))
+        I=0
+        while [ "$I" -lt "$TICKS" ]; do
+            [ -f "$EXIT_FLAG" ] && break
+            if [ -f "$DIRTY_FLAG" ]; then
+                rm -f "$DIRTY_FLAG"
+                break
+            fi
+            usleep 250000
+            I=$((I + 1))
+        done
+    else
+        I=0
+        while [ "$I" -lt "$POLL_SEC" ]; do
+            [ -f "$EXIT_FLAG" ] && break
+            if [ -f "$DIRTY_FLAG" ]; then
+                rm -f "$DIRTY_FLAG"
+                break
+            fi
+            sleep 1
+            I=$((I + 1))
+        done
     fi
 done

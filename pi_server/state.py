@@ -232,12 +232,16 @@ class DeskBuddyState:
                 "ok": result.get("ok", True),
                 "action": matched.action,
                 "message": result.get("message", ""),
+                "exit": bool(result.get("exit", False)),
                 "x": x,
                 "y": y,
                 "view": self.view.value,
             }
 
     def _execute_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if action == "exit":
+            return {"ok": True, "exit": True, "message": "Exiting Desk Buddy"}
+
         if action == "nav":
             target = ViewMode(payload["view"])
             self._set_view(target)

@@ -1,20 +1,21 @@
 #!/bin/sh
-# Lightweight Linux evdev touchscreen reader for Kindle 10th Gen (32-bit ARM).
-# Outputs one "x y" line per finger tap to stdout. Zero external binaries required.
+# Zero-buffering Linux evdev touchscreen reader for Kindle 10th Gen (32-bit ARM).
+# Uses KOReader's bundled luajit when available (instant, zero-buffering, auto-calibrates
+# hardware max_x/max_y via EVIOCGABS), with a pure-shell dd fallback.
+# Outputs one "x y" line per finger tap to stdout.
 
 set -u
 
 TOUCH_DEV="${1:-}"
 FB_W="${2:-600}"
 FB_H="${3:-800}"
-TOUCH_MAX_X="${TOUCH_MAX_X:-$FB_W}"
-TOUCH_MAX_Y="${TOUCH_MAX_Y:-$FB_H}"
+TOUCH_MAX_X="${TOUCH_MAX_X:-0}"
+TOUCH_MAX_Y="${TOUCH_MAX_Y:-0}"
 TOUCH_SWAP_XY="${TOUCH_SWAP_XY:-0}"
 TOUCH_INVERT_X="${TOUCH_INVERT_X:-0}"
 TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
 
 detect_touch_dev() {
-    # Scan /proc/bus/input/devices for a touchscreen handler
     awk '
         BEGIN { RS=""; FS="\n" }
         tolower($0) ~ /(touch|zforce|cyttsp|elan|goodix|pt_mt|synaptics|fts)/ {
@@ -35,7 +36,6 @@ if [ -z "$TOUCH_DEV" ]; then
 fi
 
 if [ -z "$TOUCH_DEV" ] || [ ! -r "$TOUCH_DEV" ]; then
-    # Fallback common Kindle 10th Gen touchscreen paths
     for candidate in /dev/input/event1 /dev/input/event2 /dev/input/event0; do
         if [ -r "$candidate" ]; then
             TOUCH_DEV="$candidate"
@@ -49,68 +49,167 @@ if [ -z "$TOUCH_DEV" ] || [ ! -r "$TOUCH_DEV" ]; then
     exit 1
 fi
 
-# 32-bit ARM Linux struct input_event is 16 bytes:
-#   4B tv_sec, 4B tv_usec, 2B type, 2B code, 4B value
-# EV_ABS=3, EV_KEY=1, EV_SYN=0
-# ABS_X=0, ABS_Y=1, ABS_MT_POSITION_X=53, ABS_MT_POSITION_Y=54, ABS_MT_TRACKING_ID=57, BTN_TOUCH=330
-hexdump -v -e '1/4 "%u " 1/4 "%u " 1/2 "%u " 1/2 "%u " 1/4 "%d\n"' "$TOUCH_DEV" | awk \
-    -v fb_w="$FB_W" \
-    -v fb_h="$FB_H" \
-    -v max_x="$TOUCH_MAX_X" \
-    -v max_y="$TOUCH_MAX_Y" \
-    -v swap_xy="$TOUCH_SWAP_XY" \
-    -v inv_x="$TOUCH_INVERT_X" \
-    -v inv_y="$TOUCH_INVERT_Y" '
-    BEGIN {
-        tx = -1; ty = -1; touching = 0; last_ms = 0;
-        if (max_x <= 0) max_x = fb_w;
-        if (max_y <= 0) max_y = fb_h;
-    }
-    {
-        sec = $1; usec = $2; type = $3; code = $4; val = $5;
+# Prefer KOReader's bundled luajit (zero buffering, exact binary struct parsing, auto EVIOCGABS)
+LUAJIT=""
+for candidate in "$(command -v luajit 2>/dev/null || true)" /mnt/us/koreader/luajit; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        LUAJIT="$candidate"
+        break
+    fi
+done
 
-        # Track coordinates (MT or single-touch)
-        if (type == 3 && (code == 53 || code == 0)) {
-            tx = val;
-            touching = 1;
-        } else if (type == 3 && (code == 54 || code == 1)) {
-            ty = val;
-            touching = 1;
-        } else if (type == 3 && code == 57) {
-            if (val >= 0) {
-                touching = 1;
-            } else if (val < 0 && touching && tx >= 0 && ty >= 0) {
-                emit(sec, usec, tx, ty);
-                touching = 0; tx = -1; ty = -1;
-            }
-        } else if (type == 1 && code == 330) {
-            if (val == 1) {
-                touching = 1;
-            } else if (val == 0 && touching && tx >= 0 && ty >= 0) {
-                emit(sec, usec, tx, ty);
-                touching = 0; tx = -1; ty = -1;
-            }
-        }
-    }
-    function emit(sec, usec, rx, ry,    now_ms, px, py, tmp) {
-        now_ms = sec * 1000 + int(usec / 1000);
-        # Debounce rapid duplicate release events (< 180ms)
-        if (now_ms - last_ms < 180) return;
-        last_ms = now_ms;
+if [ -n "$LUAJIT" ]; then
+    exec "$LUAJIT" - "$TOUCH_DEV" "$FB_W" "$FB_H" "$TOUCH_MAX_X" "$TOUCH_MAX_Y" "$TOUCH_SWAP_XY" "$TOUCH_INVERT_X" "$TOUCH_INVERT_Y" <<'EOF'
+local ffi = require("ffi")
+local bit = require("bit")
 
-        if (swap_xy == 1) {
-            tmp = rx; rx = ry; ry = tmp;
-        }
-        px = int((rx * fb_w) / max_x);
-        py = int((ry * fb_h) / max_y);
-        if (inv_x == 1) px = fb_w - 1 - px;
-        if (inv_y == 1) py = fb_h - 1 - py;
-        if (px < 0) px = 0;
-        if (px >= fb_w) px = fb_w - 1;
-        if (py < 0) py = 0;
-        if (py >= fb_h) py = fb_h - 1;
+ffi.cdef[[
+    int open(const char *pathname, int flags);
+    int close(int fd);
+    long read(int fd, void *buf, size_t count);
+    int ioctl(int fd, unsigned long request, void *argp);
+    struct input_event {
+        uint32_t tv_sec;
+        uint32_t tv_usec;
+        uint16_t type;
+        uint16_t code;
+        int32_t value;
+    };
+    struct input_absinfo {
+        int32_t value;
+        int32_t minimum;
+        int32_t maximum;
+        int32_t fuzz;
+        int32_t flat;
+        int32_t resolution;
+    };
+]]
 
-        printf "%d %d\n", px, py;
-        fflush();
-    }
-'
+local dev     = arg[1]
+local fb_w    = tonumber(arg[2]) or 600
+local fb_h    = tonumber(arg[3]) or 800
+local max_x   = tonumber(arg[4]) or 0
+local max_y   = tonumber(arg[5]) or 0
+local swap_xy = tonumber(arg[6]) or 0
+local inv_x   = tonumber(arg[7]) or 0
+local inv_y   = tonumber(arg[8]) or 0
+
+local fd = ffi.C.open(dev, 0) -- O_RDONLY
+if fd < 0 then
+    io.stderr:write("ERROR: failed to open " .. dev .. "\n")
+    os.exit(1)
+end
+
+-- Auto-detect hardware ABS_MT_POSITION_X / Y (or ABS_X / Y) range via EVIOCGABS
+local absinfo = ffi.new("struct input_absinfo")
+if max_x <= 0 then
+    if ffi.C.ioctl(fd, 0x80184575, absinfo) == 0 and absinfo.maximum > 0 then
+        max_x = absinfo.maximum
+    elseif ffi.C.ioctl(fd, 0x80184540, absinfo) == 0 and absinfo.maximum > 0 then
+        max_x = absinfo.maximum
+    else
+        max_x = fb_w - 1
+    end
+end
+if max_y <= 0 then
+    if ffi.C.ioctl(fd, 0x80184576, absinfo) == 0 and absinfo.maximum > 0 then
+        max_y = absinfo.maximum
+    elseif ffi.C.ioctl(fd, 0x80184541, absinfo) == 0 and absinfo.maximum > 0 then
+        max_y = absinfo.maximum
+    else
+        max_y = fb_h - 1
+    end
+end
+
+io.stderr:write(string.format("touch_reader(luajit): dev=%s fb=%dx%d hw_max=%dx%d\n", dev, fb_w, fb_h, max_x, max_y))
+io.stderr:flush()
+
+local ev = ffi.new("struct input_event")
+local ev_size = ffi.sizeof(ev)
+local tx, ty = -1, -1
+local touching = false
+local last_ms = 0
+
+local function emit(sec, usec, rx, ry)
+    local now_ms = tonumber(sec) * 1000 + math.floor(tonumber(usec) / 1000)
+    if (now_ms - last_ms) < 250 then return end
+    last_ms = now_ms
+
+    local x, y = rx, ry
+    if swap_xy == 1 then x, y = y, x end
+    local px = math.floor((x * (fb_w - 1)) / max_x + 0.5)
+    local py = math.floor((y * (fb_h - 1)) / max_y + 0.5)
+    if inv_x == 1 then px = (fb_w - 1) - px end
+    if inv_y == 1 then py = (fb_h - 1) - py end
+    if px < 0 then px = 0 elseif px >= fb_w then px = fb_w - 1 end
+    if py < 0 then py = 0 elseif py >= fb_h then py = fb_h - 1 end
+
+    io.stderr:write(string.format("touch raw=(%d,%d) -> fb=(%d,%d)\n", rx, ry, px, py))
+    io.stderr:flush()
+    io.stdout:write(string.format("%d %d\n", px, py))
+    io.stdout:flush()
+end
+
+while true do
+    local n = ffi.C.read(fd, ev, ev_size)
+    if n <= 0 then break end
+    if n == ev_size then
+        local t = ev.type
+        local c = ev.code
+        local v = ev.value
+        if t == 3 and (c == 53 or c == 0) then
+            tx = v
+            touching = true
+        elseif t == 3 and (c == 54 or c == 1) then
+            ty = v
+            touching = true
+        elseif t == 3 and c == 57 then
+            if v >= 0 then
+                touching = true
+            elseif touching and tx >= 0 and ty >= 0 then
+                emit(ev.tv_sec, ev.tv_usec, tx, ty)
+                touching = false; tx = -1; ty = -1
+            end
+        elseif t == 1 and c == 330 then
+            if v == 1 then
+                touching = true
+            elseif v == 0 and touching and tx >= 0 and ty >= 0 then
+                emit(ev.tv_sec, ev.tv_usec, tx, ty)
+                touching = false; tx = -1; ty = -1
+            end
+        end
+    end
+end
+ffi.C.close(fd)
+EOF
+fi
+
+# Pure-shell fallback (reads 16 bytes at a time via dd to avoid pipe buffering)
+echo "touch_reader(sh): dev=$TOUCH_DEV fb=${FB_W}x${FB_H}" >&2
+TX=-1
+TY=-1
+TOUCHING=0
+LAST_SEC=0
+[ "$TOUCH_MAX_X" -le 0 ] && TOUCH_MAX_X="$FB_W"
+[ "$TOUCH_MAX_Y" -le 0 ] && TOUCH_MAX_Y="$FB_H"
+
+while LINE="$(dd if="$TOUCH_DEV" bs=16 count=1 2>/dev/null | hexdump -v -e '1/4 "%u " 1/4 "%u " 1/2 "%u " 1/2 "%u " 1/4 "%d\n"')"; do
+    [ -z "$LINE" ] && break
+    set -- $LINE
+    SEC="$1"; TYPE="$3"; CODE="$4"; VAL="$5"
+    if [ "$TYPE" = "3" ] && { [ "$CODE" = "53" ] || [ "$CODE" = "0" ]; }; then
+        TX="$VAL"; TOUCHING=1
+    elif [ "$TYPE" = "3" ] && { [ "$CODE" = "54" ] || [ "$CODE" = "1" ]; }; then
+        TY="$VAL"; TOUCHING=1
+    elif { [ "$TYPE" = "3" ] && [ "$CODE" = "57" ] && [ "$VAL" -lt 0 ]; } || { [ "$TYPE" = "1" ] && [ "$CODE" = "330" ] && [ "$VAL" = "0" ]; }; then
+        if [ "$TOUCHING" = "1" ] && [ "$TX" -ge 0 ] && [ "$TY" -ge 0 ]; then
+            if [ $((SEC - LAST_SEC)) -ge 1 ]; then
+                LAST_SEC="$SEC"
+                PX=$(( (TX * FB_W) / TOUCH_MAX_X ))
+                PY=$(( (TY * FB_H) / TOUCH_MAX_Y ))
+                echo "$PX $PY"
+            fi
+            TOUCHING=0; TX=-1; TY=-1
+        fi
+    fi
+done

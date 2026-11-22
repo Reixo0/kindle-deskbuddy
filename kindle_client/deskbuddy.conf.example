@@ -11,9 +11,9 @@ ROTATION="90"
 # Full-flashing e-ink refresh every N partial redraws to clear ghosting
 FULL_REFRESH_EVERY="15"
 
-# Pause Kindle's home UI while Desk Buddy is running so taps only control Spotify
-# (automatically resumed when you exit Desk Buddy)
-PAUSE_KINDLE_UI="1"
+# Pause Kindle's home UI while Desk Buddy is running (0 = safe default, 1 = pause UI)
+# Keep this 0 while testing so you can always use the power button normally.
+PAUSE_KINDLE_UI="0"
 
 # Leave empty to auto-detect touchscreen /dev/input/event*
 TOUCH_DEV=""
