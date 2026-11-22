@@ -1,0 +1,14 @@
+# Secrets & local config (never commit these!)
+.env
+.spotify_cache
+kindle_client/deskbuddy.conf
+
+# Python virtual environment & caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# OS / Editor files
+.DS_Store
+*.swp

@@ -1,0 +1,26 @@
+# Configuration for the Kindle 10th Gen Desk Buddy client
+# Copy this file to /mnt/us/deskbuddy/deskbuddy.conf and set PI_URL to your Raspberry Pi's IP.
+
+PI_URL="http://192.168.1.50:8765"
+
+# Landscape rotation matching how you place the Kindle on your desk:
+# 90  = USB port on the right
+# 270 = USB port on the left
+ROTATION="90"
+
+# Full-flashing e-ink refresh every N partial redraws to clear ghosting
+FULL_REFRESH_EVERY="15"
+
+# Pause Kindle's home UI while Desk Buddy is running so taps only control Spotify
+# (automatically resumed when you exit Desk Buddy)
+PAUSE_KINDLE_UI="1"
+
+# Leave empty to auto-detect touchscreen /dev/input/event*
+TOUCH_DEV=""
+
+# Optional touch calibration (leave empty to use native screen pixels)
+TOUCH_MAX_X=""
+TOUCH_MAX_Y=""
+TOUCH_SWAP_XY="0"
+TOUCH_INVERT_X="0"
+TOUCH_INVERT_Y="0"
