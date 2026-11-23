@@ -1,14 +1,19 @@
 # Kindle Desk Buddy
 
-A lightweight, landscape e-ink **Spotify controller + desk clock** for a jailbroken **Kindle 10th Generation**, powered by a **Raspberry Pi** over Wi-Fi. No KUAL required.
+A lightweight, landscape e-ink **Spotify controller, synced lyrics viewer, and desk clock** for a jailbroken **Kindle 10th Generation**, powered by a **Raspberry Pi** over Wi-Fi. No KUAL required.
 
 ## Features
-- **Album Art Centerpiece (Now Playing):** Large Floyd-Steinberg dithered album art in landscape, with full playback controls (**Play/Pause**, **Previous**, **Next**, **Volume −/+**, **Shuffle**, and **Like/Unlike**).
-- **Idle Clock Mode (5-minute auto-switch):** When no music has played for 5 minutes, the screen switches to a giant desk clock with date, Kindle battery, and a **quick Albums / Liked Songs / Playlists selector** right below the clock so you can start music with one tap.
-- **Full Library Browser:** Browse your **Saved Albums** (tap to play the album or open its tracklist to pick a specific song), **Liked Songs**, **Playlists**, and **Recently Played**.
+- **Now Playing (Album Art + Big Clock + Synced Lyrics):**
+  - Prominent **Clock + Date** above large Floyd-Steinberg dithered **Album Art**.
+  - Complete playback controls: **Play/Pause**, **Previous**, **Next**, **Volume −/+**, **Shuffle**, **Like/Unlike**, and **tap/slide seeking** directly on the progress bar.
+  - **Live Synced Lyrics** powered by [LRCLIB](https://lrclib.net/) (free, no API key needed), showing previous, current, and upcoming lines with automatic **Japanese / CJK font support**.
+- **Kindle Frontlight Brightness Controls:** Tap the **Sun (`☀`)** button in the top bar for `−`/`+` controls and **Off / Low / Med / High / Max** presets wired directly to the Kindle's native frontlight.
+- **Idle Clock Mode (5-minute auto-switch):** When no music has played for 5 minutes, switches to a giant desk clock with date, Kindle battery, and a **quick Playlists / Albums / Liked Songs selector** right below the clock.
+- **Full Library Browser:** Browse **Playlists** (first by default), **Albums**, **Liked Songs**, and **Recently Played**. Tap any playlist or album to browse and play individual songs, or tap **Play** to start it immediately.
 - **Queue & Device Selector:** Inspect your **Up Next** queue and switch playback between any active **Spotify Connect** device (speakers, PC, phone, Raspotify, etc.).
-- **Kindle Battery & Smart E-Ink Refresh:** Displays live Kindle battery % and charging status, skips redraws when nothing changed, and triggers full flashing refreshes automatically to prevent ghosting.
-- **Interactive Browser Preview (`/preview`):** Test the entire UI and click every button from your desktop or phone browser before deploying to the Kindle.
+- **Kindle Battery & Fast E-Ink Refresh:** Displays live Kindle battery % and charging status, updates every **2 seconds** while playing, skips unchanged redraws, and triggers periodic full-flashing refreshes to prevent ghosting.
+- **1-Tap Exit & Offline Failsafe:** Tap **`X`** in the top-right corner to exit cleanly—or **double-tap the top-right corner** at any time to exit locally even if the Pi is offline.
+- **Interactive Browser Preview (`/preview`):** Test and click through the entire UI from your PC or phone browser before deploying to the Kindle.
 
 > **Default port:** `8765` (chosen to avoid conflicting with Pi-hole or other services on port `8080`).
 
@@ -19,7 +24,7 @@ A lightweight, landscape e-ink **Spotify controller + desk clock** for a jailbro
 Clone the repository onto your Raspberry Pi and create a Python virtual environment:
 
 ```bash
-git clone https://github.com/Reixo0/kindle-deskbuddy.git kindle-deskbuddy
+git clone <your-repo-url> kindle-deskbuddy
 cd kindle-deskbuddy
 python3 -m venv .venv
 ```
@@ -36,6 +41,11 @@ Activate the virtual environment and install dependencies:
   pip install -r requirements.txt
   ```
 
+*(Recommended for Japanese / Korean / Chinese song & lyric titles)* Install Noto CJK fonts on the Pi:
+```bash
+sudo apt update && sudo apt install -y fonts-noto-cjk
+```
+
 Create your local `.env` file from the template:
 ```bash
 cp .env.example .env
@@ -45,7 +55,7 @@ cp .env.example .env
 ```bash
 DEMO_MODE=1 uvicorn pi_server.app:app --host 0.0.0.0 --port 8765
 ```
-Open `http://<pi-ip>:8765/preview` in your browser to click through **Now Playing**, **Idle Clock**, **Library**, **Queue**, and **Devices**. Press `Ctrl+C` to stop when you're ready to connect Spotify.
+Open `http://<pi-ip>:8765/preview` in your browser to click through **Now Playing**, **Idle Clock**, **Library**, **Queue**, **Devices**, and **Brightness**. Press `Ctrl+C` to stop when you're ready to connect Spotify.
 
 ---
 
@@ -121,14 +131,14 @@ sudo systemctl enable --now kindle-deskbuddy
 
 ## 3. Kindle 10th Gen Setup (No KUAL Required)
 
-Make sure **`fbink`** is installed on your jailbroken Kindle (via your jailbreak package manager or bundled with KOReader).
+Desk Buddy uses the Kindle's built-in `eips` for PNG rendering and KOReader's bundled `luajit` (when present, with a shell fallback) for zero-latency, auto-calibrated touch input.
 
 1. **Copy `kindle_client/` to `/mnt/us/deskbuddy/` on your Kindle:**
-   - **Over USB:** Plug the Kindle into your PC, create a `deskbuddy` folder at the root of the Kindle drive, and copy all files from `kindle_client/` into it.
+   - **Over USB:** Plug the Kindle into your PC, create a `deskbuddy` folder at the root of the Kindle drive, and copy `deskbuddy.sh`, `touch_reader.sh`, and `deskbuddy.conf.example` into it.
    - **Or over SSH:**
      ```bash
      ssh root@<kindle-ip> "mkdir -p /mnt/us/deskbuddy"
-     scp kindle_client/* root@<kindle-ip>:/mnt/us/deskbuddy/
+     scp kindle_client/deskbuddy.sh kindle_client/touch_reader.sh kindle_client/deskbuddy.conf.example root@<kindle-ip>:/mnt/us/deskbuddy/
      ```
 
 2. **Configure your Pi's IP on the Kindle:**
@@ -139,21 +149,19 @@ Make sure **`fbink`** is installed on your jailbroken Kindle (via your jailbreak
    ```
 
 3. **Launch Desk Buddy (choose either method):**
-   - **As a Kindle Scriptlet** (WinterBreak / ScriptletsForKindle): copy `start_deskbuddy.sh` to `/mnt/us/documents/DeskBuddy.sh` and tap **Desk Buddy** right from your Kindle library.
+   - **As a Kindle Scriptlet** (WinterBreak / ScriptletsForKindle): copy `kindle_client/start_deskbuddy.sh` to `/mnt/us/documents/DeskBuddy.sh` and tap **Desk Buddy** right from your Kindle library.
    - **Over SSH:**
      ```bash
      sh /mnt/us/deskbuddy/deskbuddy.sh
      ```
 
 ### Exiting Desk Buddy
-Tap the **native top-left corner** of the Kindle screen **4 times within 4 seconds** (or press `Ctrl+C` over SSH). Desk Buddy will cleanly restore the Kindle UI and screensaver.
+- Tap the **`X`** button in the top-right corner of the screen.
+- **Offline failsafe:** If the Pi is unreachable or returning an error, **double-tap the top-right corner** within 3 seconds to exit locally without rebooting.
 
-### Touch Calibration (if taps feel offset)
-Run the built-in touch test over SSH:
-```bash
-sh /mnt/us/deskbuddy/deskbuddy.sh --test-touch
-```
-Tap the four corners of the screen. If your digitizer reports raw coordinates (e.g. `0..4095` instead of `0..600`), set `TOUCH_MAX_X`, `TOUCH_MAX_Y`, `TOUCH_SWAP_XY`, `TOUCH_INVERT_X`, or `TOUCH_INVERT_Y` in `/mnt/us/deskbuddy/deskbuddy.conf`.
+### Troubleshooting & Logs
+- The Kindle client writes a log to `/mnt/us/deskbuddy/deskbuddy.log` (readable over USB).
+- If taps feel offset on a different Kindle model, run `sh /mnt/us/deskbuddy/deskbuddy.sh --test-touch` over SSH and adjust `TOUCH_MAX_X`, `TOUCH_MAX_Y`, `TOUCH_SWAP_XY`, `TOUCH_INVERT_X`, or `TOUCH_INVERT_Y` in `deskbuddy.conf`.
 
 ---
 
@@ -186,4 +194,3 @@ rm -rf ~/kindle-deskbuddy
 
 ### Removing from the Kindle
 Delete the `deskbuddy` folder and `documents/DeskBuddy.sh` over USB (or via SSH: `rm -rf /mnt/us/deskbuddy /mnt/us/documents/DeskBuddy.sh`).
-
