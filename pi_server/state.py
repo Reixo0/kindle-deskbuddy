@@ -421,6 +421,18 @@ class DeskBuddyState:
                 self.refresh_playback()
             return {"ok": res.ok, "message": res.message}
 
+        if action == "play_queue_index":
+            q_idx = int(payload.get("index", 0))
+            _, upcoming = self.get_queue_data()
+            res = self.spotify.play_from_queue(q_idx, upcoming)
+            self.set_banner(res.message, ttl=3.0)
+            if res.ok:
+                self.invalidate_cache("queue")
+                self.last_playing_at = time.monotonic()
+                self._set_view(ViewMode.NOW_PLAYING)
+                self.refresh_playback()
+            return {"ok": res.ok, "message": res.message}
+
         if action == "cycle_device":
             self.invalidate_cache("devices")
             devices = self.get_devices_data()

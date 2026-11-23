@@ -45,6 +45,7 @@ class PlaybackState:
     device_id: str = ""
     device_name: str = ""
     device_type: str = ""
+    context_uri: str = ""
     is_liked: bool = False
     authenticated: bool = True
     error_message: str = ""
@@ -105,6 +106,7 @@ class SpotifyBackend(Protocol):
     def get_queue(self) -> tuple[Optional[MediaItem], list[MediaItem]]: ...
     def get_devices(self) -> list[DeviceItem]: ...
     def play_item(self, item: MediaItem, shuffle: Optional[bool] = None) -> ActionResult: ...
+    def play_from_queue(self, index: int, upcoming: list[MediaItem]) -> ActionResult: ...
     def transfer_playback(self, device_id: str, force_play: bool = True) -> ActionResult: ...
     def get_album_art_bytes(self, url: str) -> Optional[bytes]: ...
 
@@ -300,6 +302,7 @@ class RealSpotifyService:
             device_id=device.get("id") or "",
             device_name=device.get("name") or "",
             device_type=device.get("type") or "",
+            context_uri=ctx_uri,
             is_liked=self._check_liked(track_id),
             authenticated=True,
         )
@@ -791,6 +794,39 @@ class RealSpotifyService:
             logger.warning("play_item error: %s", exc)
             return ActionResult(False, "Could not start playback")
 
+    def play_from_queue(self, index: int, upcoming: list[MediaItem]) -> ActionResult:
+        """Jump to a track in the queue while keeping the playlist or remaining queue playing."""
+        if not self.is_authenticated():
+            return ActionResult(False, "Connect Spotify first")
+        if index < 0 or index >= len(upcoming):
+            return ActionResult(False, "Track not in queue")
+        target = upcoming[index]
+        device_id = self._last_playback.device_id or self._pick_target_device_id()
+        if not device_id:
+            return ActionResult(False, "No Spotify device — open Spotify on a device")
+
+        ctx_uri = self._last_playback.context_uri
+        # 1. If playing from a playlist/album context, jump within that context so the whole playlist continues
+        if ctx_uri and (":playlist:" in ctx_uri or ":album:" in ctx_uri):
+            try:
+                self._sp.start_playback(
+                    device_id=device_id,
+                    context_uri=ctx_uri,
+                    offset={"uri": target.uri},
+                )
+                return ActionResult(True, f"Playing {target.title}")
+            except Exception as exc:
+                logger.info("Context offset jump failed (%s), falling back to queue URIs", exc)
+
+        # 2. Fallback: queue this track + all remaining upcoming tracks so playback keeps going
+        try:
+            uris = [t.uri for t in upcoming[index : index + 30] if t.uri]
+            self._sp.start_playback(device_id=device_id, uris=uris)
+            return ActionResult(True, f"Playing {target.title}")
+        except Exception as exc:
+            logger.warning("play_from_queue error: %s", exc)
+            return ActionResult(False, "Could not jump to track")
+
     def transfer_playback(self, device_id: str, force_play: bool = True) -> ActionResult:
         if not self.is_authenticated():
             return ActionResult(False, "Connect Spotify first")
@@ -1045,6 +1081,11 @@ class DemoSpotifyService:
         self._last_tick = time.monotonic()
         verb = "Shuffling" if shuffle else "Playing"
         return ActionResult(True, f"{verb} {item.title}")
+
+    def play_from_queue(self, index: int, upcoming: list[MediaItem]) -> ActionResult:
+        if 0 <= index < len(upcoming):
+            return self.play_item(upcoming[index])
+        return ActionResult(False, "Track not in queue")
 
     def transfer_playback(self, device_id: str, force_play: bool = True) -> ActionResult:
         for d in self._devices:

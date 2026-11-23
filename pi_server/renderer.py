@@ -1384,7 +1384,7 @@ class DeskBuddyRenderer:
                 draw.text((rx1 + s(16), cy - s(9)), _truncate_text(draw, t_label, t_font, max_tw), font=t_font, fill=BLACK, anchor="lm")
                 draw.text((rx1 + s(38), cy + s(12)), _truncate_text(draw, item.subtitle, s_font, max_tw - s(22)), font=s_font, fill=DARK_GRAY, anchor="lm")
                 self._draw_play_icon(draw, rx2 - s(28), cy, s(9), BLACK)
-                add_box(rx1, ry1, rx2, ry2, "play_item", item=item)
+                add_box(rx1, ry1, rx2, ry2, "play_queue_index", index=page * per_page + idx)
 
         self._render_pagination(draw, page, total_pages, w, h, footer_h, s, add_box)
 
