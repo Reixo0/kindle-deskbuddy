@@ -494,6 +494,58 @@ class DeskBuddyRenderer:
         ]
         draw.polygon(pts, fill=BLACK)
 
+    def _draw_arrow_up(self, draw: ImageDraw.ImageDraw, cx: int, cy: int, size: int, color: int) -> None:
+        h = max(4, size)
+        w = max(2, size // 5)
+        hw = max(3, int(h * 0.42))
+        top_y = cy - h // 2
+        bot_y = cy + h // 2
+        draw.line([(cx, top_y + 1), (cx, bot_y)], fill=color, width=w)
+        draw.polygon([(cx, top_y), (cx - hw, top_y + hw), (cx + hw, top_y + hw)], fill=color)
+
+    def _draw_arrow_down(self, draw: ImageDraw.ImageDraw, cx: int, cy: int, size: int, color: int) -> None:
+        h = max(4, size)
+        w = max(2, size // 5)
+        hw = max(3, int(h * 0.42))
+        top_y = cy - h // 2
+        bot_y = cy + h // 2
+        draw.line([(cx, top_y), (cx, bot_y - 1)], fill=color, width=w)
+        draw.polygon([(cx, bot_y), (cx - hw, bot_y - hw), (cx + hw, bot_y - hw)], fill=color)
+
+    def _draw_minmax_arrows(
+        self,
+        draw: ImageDraw.ImageDraw,
+        x: int,
+        cy: int,
+        temp_max: float,
+        temp_min: float,
+        font: ImageFont.ImageFont,
+        arrow_size: int,
+        color: int,
+        s,
+        align_right: bool = False,
+    ) -> int:
+        """Draw '↑22°  ↓12°' with crisp vector arrows; return total width."""
+        max_txt = f"{round(temp_max)}°"
+        min_txt = f"{round(temp_min)}°"
+        aw = arrow_size
+        gap_a = s(3)
+        gap_mid = s(10)
+        max_w = int(draw.textlength(max_txt, font=font))
+        min_w = int(draw.textlength(min_txt, font=font))
+        total_w = aw + gap_a + max_w + gap_mid + aw + gap_a + min_w
+
+        start_x = (x - total_w) if align_right else x
+        cur = start_x
+        self._draw_arrow_up(draw, cur + aw // 2, cy, arrow_size, color)
+        cur += aw + gap_a
+        draw.text((cur, cy), max_txt, font=font, fill=color, anchor="lm")
+        cur += max_w + gap_mid
+        self._draw_arrow_down(draw, cur + aw // 2, cy, arrow_size, color)
+        cur += aw + gap_a
+        draw.text((cur, cy), min_txt, font=font, fill=color, anchor="lm")
+        return total_w
+
     def _render_top_bar(
         self,
         draw: ImageDraw.ImageDraw,
@@ -611,30 +663,46 @@ class DeskBuddyRenderer:
         art_x = margin_x
         art_y = content_top + clock_band_h + s(10)
 
-        # Prominent Clock + Weather (and Date) aligned cleanly with album art width
+        # Prominent Clock + Date + Weather aligned cleanly across the Album Art width
         clock_str = _format_clock(self.settings.time_format)
-        clock_font_size = s(54) if self.settings.time_format == "24h" else s(42)
+        clock_font_size = s(48) if self.settings.time_format == "24h" else s(38)
         clock_font = self.fonts.get(clock_font_size, bold=True)
         clock_cy = content_top + clock_band_h // 2
         draw.text((art_x, clock_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+        clock_right = art_x + int(draw.textlength(clock_str, font=clock_font))
 
+        date_str = _format_date()
         weather = state.weather.get_weather()
         right_edge = art_x + art_size
         if weather is not None:
             temp_str = f"{round(weather.temp)}°"
-            mm_str = f"{round(weather.temp_min)}° / {round(weather.temp_max)}°"
-            temp_font = self.fonts.get(s(28), bold=True)
+            temp_font = self.fonts.get(s(26), bold=True)
             mm_font = self.fonts.get(s(14), bold=True)
             tw = int(draw.textlength(temp_str, font=temp_font))
-            mw = int(draw.textlength(mm_str, font=mm_font))
-            col_w = max(tw, mw)
-            text_right = right_edge
-            draw.text((text_right - tw, clock_cy - s(11)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
-            draw.text((text_right - mw, clock_cy + s(16)), mm_str, font=mm_font, fill=DARK_GRAY, anchor="lm")
-            icon_cx = text_right - col_w - s(24)
-            self._draw_weather_icon(draw, icon_cx, clock_cy, s(17), weather.condition)
+            mm_w = self._draw_minmax_arrows(
+                draw,
+                right_edge,
+                clock_cy + s(17),
+                weather.temp_max,
+                weather.temp_min,
+                mm_font,
+                s(10),
+                DARK_GRAY,
+                s,
+                align_right=True,
+            )
+            draw.text((right_edge - tw, clock_cy - s(11)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
+            col_w = max(tw, mm_w)
+            icon_cx = right_edge - col_w - s(20)
+            self._draw_weather_icon(draw, icon_cx, clock_cy, s(15), weather.condition)
+
+            # Place Date cleanly centered in the space between Clock and Weather
+            weather_left = icon_cx - s(18)
+            mid_x = (clock_right + weather_left) // 2
+            date_font = self.fonts.get(s(16), bold=True)
+            if (weather_left - clock_right) >= int(draw.textlength(date_str, font=date_font)) + s(8):
+                draw.text((mid_x, clock_cy + s(2)), date_str, font=date_font, fill=DARK_GRAY, anchor="mm")
         else:
-            date_str = _format_date()
             date_font = self.fonts.get(s(20), bold=True)
             dw = int(draw.textlength(date_str, font=date_font))
             draw.text((right_edge - dw, clock_cy + s(6)), date_str, font=date_font, fill=DARK_GRAY, anchor="lm")
@@ -960,9 +1028,19 @@ class DeskBuddyRenderer:
             temp_font = self.fonts.get(s(40), bold=True)
             draw.text((wx_box_x + s(76), hero_cy - s(18)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
 
-            mm_str = f"L:{round(weather.temp_min)}°  H:{round(weather.temp_max)}°"
             mm_font = self.fonts.get(s(17), bold=True)
-            draw.text((wx_box_x + s(76), hero_cy + s(20)), mm_str, font=mm_font, fill=DARK_GRAY, anchor="lm")
+            self._draw_minmax_arrows(
+                draw,
+                wx_box_x + s(76),
+                hero_cy + s(20),
+                weather.temp_max,
+                weather.temp_min,
+                mm_font,
+                s(12),
+                DARK_GRAY,
+                s,
+                align_right=False,
+            )
 
             cond_font = self.fonts.get(s(15), bold=False)
             draw.text((wx_box_x + s(32), hero_cy + s(40)), weather.label, font=cond_font, fill=DARK_GRAY, anchor="mm")
