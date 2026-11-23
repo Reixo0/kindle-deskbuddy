@@ -6,6 +6,8 @@
 
 set -u
 
+[ -n "${TOUCH_PID_FILE:-}" ] && echo "$$" > "$TOUCH_PID_FILE"
+
 TOUCH_DEV="${1:-}"
 FB_W="${2:-600}"
 FB_H="${3:-800}"

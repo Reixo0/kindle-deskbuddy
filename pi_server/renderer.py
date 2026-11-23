@@ -586,42 +586,10 @@ class DeskBuddyRenderer:
         # Tapping the album art toggles play/pause for effortless desk use
         add_box(art_x, art_y, art_x + art_size, art_y + art_size, "play_pause")
 
-        # Right column: Track metadata + complete controls filling full height cleanly
+        # Right column: Track metadata + complete controls grouped tightly and aligned with Album Art
         rx = art_x + art_size + s(24)
         rw = w - rx - margin_x
-        y = content_top + s(4)
 
-        # Track title (up to 2 lines, CJK-aware)
-        title_text = pb.track_name or ("Nothing Playing" if pb.authenticated else "Spotify Not Linked")
-        title_font = self.fonts.for_text(title_text, s(26), bold=True)
-        title_lines = _wrap_text(draw, title_text, title_font, rw, max_lines=2)
-        for line in title_lines:
-            draw.text((rx, y), line, font=title_font, fill=BLACK)
-            y += s(34)
-
-        # Artist & Album (CJK-aware)
-        artist_raw = pb.artist_name or ("Tap Library to pick music" if pb.authenticated else "Open /auth/login on Pi")
-        artist_font = self.fonts.for_text(artist_raw, s(20), bold=False)
-        artist_str = _truncate_text(draw, artist_raw, artist_font, rw)
-        y += s(6)
-        draw.text((rx, y), artist_str, font=artist_font, fill=BLACK)
-        y += s(28)
-
-        if pb.album_name:
-            album_font = self.fonts.for_text(pb.album_name, s(16), bold=False)
-            draw.text((rx, y), _truncate_text(draw, pb.album_name, album_font, rw), font=album_font, fill=DARK_GRAY)
-        y += s(28)
-
-        # Active device pill (tappable shortcut to Devices view)
-        dev_label = f"On: {pb.device_name}" if pb.device_name else "Select Device..."
-        dev_font = self.fonts.for_text(dev_label, s(15), bold=True)
-        dev_text = _truncate_text(draw, dev_label, dev_font, rw - s(16))
-        dev_box = (rx, y, rx + rw, y + s(32))
-        draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
-        draw.text(((dev_box[0] + dev_box[2]) // 2, (dev_box[1] + dev_box[3]) // 2), dev_text, font=dev_font, fill=BLACK, anchor="mm")
-        add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
-
-        # Anchor controls cleanly to the bottom of the right column so there's zero wasted gap
         vol_h = s(52)
         tog_h = s(54)
         btn_h = s(74)
@@ -631,6 +599,44 @@ class DeskBuddyRenderer:
         tog_y = vol_y - gap - tog_h
         trans_y = tog_y - gap - btn_h
         prog_y = trans_y - s(46)
+
+        # Position Device pill, Album, Artist, and Title directly above the progress bar so there's no awkward gap
+        dev_h = s(32)
+        dev_y = prog_y - s(18) - dev_h
+
+        title_text = pb.track_name or ("Nothing Playing" if pb.authenticated else "Spotify Not Linked")
+        title_font = self.fonts.for_text(title_text, s(26), bold=True)
+        title_lines = _wrap_text(draw, title_text, title_font, rw, max_lines=2)
+
+        artist_raw = pb.artist_name or ("Tap Library to pick music" if pb.authenticated else "Open /auth/login on Pi")
+        artist_font = self.fonts.for_text(artist_raw, s(20), bold=False)
+
+        album_h = s(24) if pb.album_name else 0
+        artist_h = s(28)
+        title_h = len(title_lines) * s(34)
+        meta_top = max(content_top + s(4), dev_y - s(12) - album_h - artist_h - title_h)
+        y = meta_top
+
+        for line in title_lines:
+            draw.text((rx, y), line, font=title_font, fill=BLACK)
+            y += s(34)
+
+        artist_str = _truncate_text(draw, artist_raw, artist_font, rw)
+        draw.text((rx, y + s(2)), artist_str, font=artist_font, fill=BLACK)
+        y += artist_h
+
+        if pb.album_name:
+            album_font = self.fonts.for_text(pb.album_name, s(16), bold=False)
+            draw.text((rx, y + s(2)), _truncate_text(draw, pb.album_name, album_font, rw), font=album_font, fill=DARK_GRAY)
+
+        # Active device pill (tappable shortcut to Devices view)
+        dev_label = f"On: {pb.device_name}" if pb.device_name else "Select Device..."
+        dev_font = self.fonts.for_text(dev_label, s(15), bold=True)
+        dev_text = _truncate_text(draw, dev_label, dev_font, rw - s(16))
+        dev_box = (rx, dev_y, rx + rw, dev_y + dev_h)
+        draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
+        draw.text(((dev_box[0] + dev_box[2]) // 2, (dev_box[1] + dev_box[3]) // 2), dev_text, font=dev_font, fill=BLACK, anchor="mm")
+        add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
 
         # Progress bar
         bar_h = s(12)

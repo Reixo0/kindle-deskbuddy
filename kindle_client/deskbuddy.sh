@@ -26,6 +26,7 @@ mkdir -p "$TMP_DIR"
 IMG_FILE="$TMP_DIR/screen.png"
 HDR_FILE="$TMP_DIR/headers.txt"
 PID_FILE="$TMP_DIR/deskbuddy.pid"
+TOUCH_PID_FILE="$TMP_DIR/touch.pid"
 DIRTY_FLAG="$TMP_DIR/dirty"
 EXIT_FLAG="$TMP_DIR/exit"
 
@@ -113,7 +114,12 @@ if [ "${1:-}" = "--test-touch" ]; then
     exec sh "$SCRIPT_DIR/touch_reader.sh" "$TOUCH_DEV" "$FB_W" "$FB_H"
 fi
 
-# Prevent duplicate instances
+# Prevent duplicate instances (including any orphaned touch reader)
+if [ -f "$TOUCH_PID_FILE" ]; then
+    OLD_TPID="$(cat "$TOUCH_PID_FILE" 2>/dev/null || true)"
+    [ -n "$OLD_TPID" ] && kill "$OLD_TPID" 2>/dev/null || true
+    rm -f "$TOUCH_PID_FILE"
+fi
 if [ -f "$PID_FILE" ]; then
     OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
@@ -195,6 +201,11 @@ http_send_tap() {
 }
 
 cleanup() {
+    if [ -f "$TOUCH_PID_FILE" ]; then
+        TPID="$(cat "$TOUCH_PID_FILE" 2>/dev/null || true)"
+        [ -n "$TPID" ] && kill "$TPID" 2>/dev/null || true
+        rm -f "$TOUCH_PID_FILE"
+    fi
     [ -n "$TOUCH_PID" ] && kill "$TOUCH_PID" 2>/dev/null || true
     if [ "$PAUSED_UI" = "1" ]; then
         for proc in awesome lab126_gui; do
@@ -243,7 +254,7 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
 (
     CORNER_TAPS=0
     CORNER_START=0
-    sh "$SCRIPT_DIR/touch_reader.sh" "$TOUCH_DEV" "$FB_W" "$FB_H" 2>>"$LOG_FILE" | while read -r TX TY; do
+    TOUCH_PID_FILE="$TOUCH_PID_FILE" sh "$SCRIPT_DIR/touch_reader.sh" "$TOUCH_DEV" "$FB_W" "$FB_H" 2>>"$LOG_FILE" | while read -r TX TY; do
         [ -z "$TX" ] && continue
 
         # Secret exit gesture: 4 quick taps in the native top-left 60x60 corner within 4 seconds
@@ -263,6 +274,7 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
 
         read_battery
         RESP="$(http_send_tap "${PI_URL}/api/tap?x=${TX}&y=${TY}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}")"
+        log "tap ($TX,$TY) -> ${RESP:-EMPTY}"
         if echo "$RESP" | grep -q '"exit": *true'; then
             log "Exit button tapped"
             : > "$EXIT_FLAG"
