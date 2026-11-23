@@ -173,8 +173,9 @@ class TestStateMachine(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertNotEqual(self.state.playback.device_id, prev_dev)
 
-        # 4. Losing all Spotify devices jumps straight to IDLE_CLOCK immediately
+        # 4. Losing all Spotify devices jumps straight to IDLE_CLOCK after grace period
         self.state.view = ViewMode.NOW_PLAYING
+        self.state.last_interaction_at = time.monotonic() - 15
         orig_get_pb = self.spotify.get_playback
         self.spotify.get_playback = lambda: PlaybackState(authenticated=True, is_playing=False, device_id="")
         try:

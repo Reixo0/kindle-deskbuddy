@@ -665,11 +665,6 @@ class RealSpotifyService:
             device_id = self._last_playback.device_id or self._pick_target_device_id()
             if not device_id:
                 return ActionResult(False, "No Spotify device — open Spotify on a device")
-            if shuffle is not None:
-                try:
-                    self._sp.shuffle(bool(shuffle), device_id=device_id)
-                except Exception:
-                    pass
             if item.kind in ("album", "playlist"):
                 self._sp.start_playback(device_id=device_id, context_uri=item.uri)
             elif item.context_uri:
@@ -680,12 +675,16 @@ class RealSpotifyService:
                 )
             else:
                 self._sp.start_playback(device_id=device_id, uris=[item.uri])
-            if shuffle is True:
+
+            # Apply shuffle once AFTER playback starts so cold Spotify Connect devices don't glitch
+            if shuffle is not None:
+                time.sleep(0.35)
                 try:
-                    self._sp.shuffle(True, device_id=device_id)
+                    self._sp.shuffle(bool(shuffle), device_id=device_id)
                 except Exception:
                     pass
-                return ActionResult(True, f"Shuffling {item.title}")
+                if shuffle:
+                    return ActionResult(True, f"Shuffling {item.title}")
             return ActionResult(True, f"Playing {item.title}")
         except Exception as exc:
             logger.warning("play_item error: %s", exc)

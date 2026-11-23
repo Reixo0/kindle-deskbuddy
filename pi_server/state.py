@@ -168,11 +168,13 @@ class DeskBuddyState:
             else:
                 idle_elapsed = now - self.last_playing_at
                 interaction_elapsed = now - self.last_interaction_at
-                # If Spotify lost all active devices, jump straight to the Standby Clock
+                # If Spotify lost all active devices (after a brief grace period for freshly started playback),
+                # jump straight to the Standby Clock without waiting 5 minutes.
                 lost_all_devices = (
                     pb.authenticated
                     and not pb.device_id
                     and not pb.error_message
+                    and interaction_elapsed >= 12.0
                 )
                 if lost_all_devices and self.view == ViewMode.NOW_PLAYING:
                     self._set_view(ViewMode.IDLE_CLOCK)
@@ -424,6 +426,10 @@ class DeskBuddyState:
                 self.set_banner("No Spotify devices found", ttl=3.0)
                 return {"ok": False, "message": "No Spotify devices found"}
             active_idx = next((i for i, d in enumerate(devices) if d.is_active), -1)
+            if len(devices) == 1 and active_idx == 0:
+                msg = f"Active: {devices[0].name}"
+                self.set_banner(msg, ttl=2.0)
+                return {"ok": True, "message": msg}
             next_dev = devices[(active_idx + 1) % len(devices)]
             res = self.spotify.transfer_playback(next_dev.id, force_play=self.playback.is_playing)
             self.invalidate_cache("devices")
