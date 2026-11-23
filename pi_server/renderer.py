@@ -1046,19 +1046,29 @@ class DeskBuddyRenderer:
         row_gap = s(10)
         row_h = (list_h - row_gap * (per_page - 1)) // per_page
 
-        for i, tr in enumerate(page_tracks):
-            ry1 = list_top + i * (row_h + row_gap)
-            ry2 = ry1 + row_h
-            rx1, rx2 = s(18), w - s(18)
-            draw.rounded_rectangle([rx1, ry1, rx2, ry2], radius=s(8), fill=WHITE, outline=BLACK, width=max(1, s(2)))
-            cy = (ry1 + ry2) // 2
-            max_tw = (rx2 - rx1) - s(80)
-            row_title_font = self.fonts.for_text(tr.title, s(18), bold=True)
-            row_sub_font = self.fonts.for_text(tr.subtitle, s(14), bold=False)
-            draw.text((rx1 + s(16), cy - s(10)), _truncate_text(draw, tr.title, row_title_font, max_tw), font=row_title_font, fill=BLACK, anchor="lm")
-            draw.text((rx1 + s(16), cy + s(12)), _truncate_text(draw, tr.subtitle, row_sub_font, max_tw), font=row_sub_font, fill=DARK_GRAY, anchor="lm")
-            self._draw_play_icon(draw, rx2 - s(30), cy, s(10), BLACK)
-            add_box(rx1, ry1, rx2, ry2, "play_item", item=tr)
+        if not page_tracks:
+            empty_font = self.fonts.get(s(19), bold=False)
+            draw.text(
+                (w // 2, list_top + list_h // 2),
+                "No tracks returned by Spotify (tap Play Playlist above).",
+                font=empty_font,
+                fill=DARK_GRAY,
+                anchor="mm",
+            )
+        else:
+            for i, tr in enumerate(page_tracks):
+                ry1 = list_top + i * (row_h + row_gap)
+                ry2 = ry1 + row_h
+                rx1, rx2 = s(18), w - s(18)
+                draw.rounded_rectangle([rx1, ry1, rx2, ry2], radius=s(8), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+                cy = (ry1 + ry2) // 2
+                max_tw = (rx2 - rx1) - s(80)
+                row_title_font = self.fonts.for_text(tr.title, s(18), bold=True)
+                row_sub_font = self.fonts.for_text(tr.subtitle, s(14), bold=False)
+                draw.text((rx1 + s(16), cy - s(10)), _truncate_text(draw, tr.title, row_title_font, max_tw), font=row_title_font, fill=BLACK, anchor="lm")
+                draw.text((rx1 + s(16), cy + s(12)), _truncate_text(draw, tr.subtitle, row_sub_font, max_tw), font=row_sub_font, fill=DARK_GRAY, anchor="lm")
+                self._draw_play_icon(draw, rx2 - s(30), cy, s(10), BLACK)
+                add_box(rx1, ry1, rx2, ry2, "play_item", item=tr)
 
         self._render_pagination(draw, page, total_pages, w, h, footer_h, s, add_box)
 

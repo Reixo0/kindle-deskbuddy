@@ -451,28 +451,40 @@ class RealSpotifyService:
     def get_playlist_tracks(self, playlist_id: str, playlist_uri: str = "") -> list[MediaItem]:
         if not self.is_authenticated() or not playlist_id:
             return []
+        res = None
         try:
-            res = self._sp.playlist_items(playlist_id, limit=50, additional_types=("track",)) or {}
-            items: list[MediaItem] = []
-            for idx, entry in enumerate(res.get("items", [])):
-                tr = (entry or {}).get("track") or {}
-                if not tr or not tr.get("uri"):
-                    continue
-                artists = ", ".join(a.get("name", "") for a in tr.get("artists", []) if a.get("name"))
-                items.append(
-                    MediaItem(
-                        id=tr.get("id", ""),
-                        uri=tr.get("uri", ""),
-                        title=f"{idx + 1}. {tr.get('name', 'Unknown Track')}",
-                        subtitle=artists,
-                        kind="track",
-                        context_uri=playlist_uri,
-                    )
-                )
-            return items
+            # Modern Spotify Web API endpoint (2026+): /playlists/{id}/items
+            res = self._sp._get(f"playlists/{playlist_id}/items", limit=50)
         except Exception as exc:
-            logger.warning("get_playlist_tracks error: %s", exc)
-            return []
+            logger.info("playlists/%s/items fallback (%s), trying playlist_items", playlist_id, exc)
+            try:
+                res = self._sp.playlist_items(playlist_id, limit=50, additional_types=("track",))
+            except Exception as exc2:
+                logger.warning("get_playlist_tracks error: %s", exc2)
+                return []
+
+        items: list[MediaItem] = []
+        raw_items = (res or {}).get("items", [])
+        for entry in raw_items:
+            if not isinstance(entry, dict):
+                continue
+            # Support both new ('item') and legacy ('track') payload keys
+            tr = entry.get("item") or entry.get("track") or {}
+            if not isinstance(tr, dict) or not tr.get("uri"):
+                continue
+            artists = ", ".join(a.get("name", "") for a in tr.get("artists", []) if a.get("name"))
+            num = len(items) + 1
+            items.append(
+                MediaItem(
+                    id=tr.get("id", ""),
+                    uri=tr.get("uri", ""),
+                    title=f"{num}. {tr.get('name', 'Unknown Track')}",
+                    subtitle=artists,
+                    kind="track",
+                    context_uri=playlist_uri,
+                )
+            )
+        return items
 
     def get_recently_played(self, limit: int = 20) -> list[MediaItem]:
         if not self.is_authenticated():
