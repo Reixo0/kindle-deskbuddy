@@ -672,6 +672,7 @@ class DeskBuddyRenderer:
         clock_right = art_x + int(draw.textlength(clock_str, font=clock_font))
 
         date_str = _format_date()
+        date_font = self.fonts.get(s(20), bold=True)
         weather = state.weather.get_weather()
         right_edge = art_x + art_size
         if weather is not None:
@@ -682,7 +683,7 @@ class DeskBuddyRenderer:
             mm_w = self._draw_minmax_arrows(
                 draw,
                 right_edge,
-                clock_cy + s(17),
+                clock_cy + s(18),
                 weather.temp_max,
                 weather.temp_min,
                 mm_font,
@@ -691,21 +692,21 @@ class DeskBuddyRenderer:
                 s,
                 align_right=True,
             )
+            # Big weather icon tucked right to the left of the temperature
             draw.text((right_edge - tw, clock_cy - s(11)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
-            col_w = max(tw, mm_w)
-            icon_cx = right_edge - col_w - s(20)
-            self._draw_weather_icon(draw, icon_cx, clock_cy, s(15), weather.condition)
+            icon_r = s(17)
+            icon_cx = right_edge - tw - icon_r - s(6)
+            self._draw_weather_icon(draw, icon_cx, clock_cy - s(10), icon_r, weather.condition)
 
-            # Place Date cleanly centered in the space between Clock and Weather
-            weather_left = icon_cx - s(18)
+            weather_left = min(right_edge - mm_w, icon_cx - icon_r)
             mid_x = (clock_right + weather_left) // 2
-            date_font = self.fonts.get(s(16), bold=True)
-            if (weather_left - clock_right) >= int(draw.textlength(date_str, font=date_font)) + s(8):
-                draw.text((mid_x, clock_cy + s(2)), date_str, font=date_font, fill=DARK_GRAY, anchor="mm")
+            avail_mid = weather_left - clock_right
+            if avail_mid < int(draw.textlength(date_str, font=date_font)) + s(6):
+                date_font = self.fonts.get(s(18), bold=True)
+            draw.text((mid_x, clock_cy + s(2)), date_str, font=date_font, fill=BLACK, anchor="mm")
         else:
-            date_font = self.fonts.get(s(20), bold=True)
             dw = int(draw.textlength(date_str, font=date_font))
-            draw.text((right_edge - dw, clock_cy + s(6)), date_str, font=date_font, fill=DARK_GRAY, anchor="lm")
+            draw.text((right_edge - dw, clock_cy + s(4)), date_str, font=date_font, fill=BLACK, anchor="lm")
 
         draw.line(
             [(art_x, art_y - s(6)), (art_x + art_size, art_y - s(6))],
@@ -1010,29 +1011,51 @@ class DeskBuddyRenderer:
         )
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
 
-        # Hero Clock + Weather side-by-side
+        # Hero Clock + Weather centered cleanly as one balanced group
         clock_str = _format_clock(self.settings.time_format)
         weather = state.weather.get_weather()
         hero_cy = s(145)
         if weather is not None:
-            clock_size = s(126) if self.settings.time_format == "24h" else s(96)
+            clock_size = s(124) if self.settings.time_format == "24h" else s(94)
             clock_font = self.fonts.get(clock_size, bold=True)
-            draw.text((s(36), hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
-
-            # Weather block on the right side of the hero band
-            wx_box_x = w - s(240)
-            draw.line([(wx_box_x - s(18), s(82)), (wx_box_x - s(18), s(212))], fill=MID_GRAY, width=max(1, s(1)))
-            self._draw_weather_icon(draw, wx_box_x + s(32), hero_cy - s(14), s(26), weather.condition)
-
             temp_str = f"{round(weather.temp)}°{weather.unit}"
             temp_font = self.fonts.get(s(40), bold=True)
-            draw.text((wx_box_x + s(76), hero_cy - s(18)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
-
             mm_font = self.fonts.get(s(17), bold=True)
+            cond_font = self.fonts.get(s(15), bold=True)
+
+            clock_w = int(draw.textlength(clock_str, font=clock_font))
+            cond_w = int(draw.textlength(weather.label, font=cond_font))
+            icon_col_w = max(s(66), cond_w)
+            temp_w = int(draw.textlength(temp_str, font=temp_font))
+            mm_est_w = int(draw.textlength(f"{round(weather.temp_max)}°{round(weather.temp_min)}°", font=mm_font)) + s(40)
+            right_col_w = max(temp_w, mm_est_w)
+
+            div_gap = s(36)
+            col_gap = s(16)
+            weather_w = icon_col_w + col_gap + right_col_w
+            total_w = clock_w + div_gap + weather_w
+            start_x = max(s(24), (w - total_w) // 2)
+
+            draw.text((start_x, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+
+            # Subtle vertical divider between Clock and Weather
+            div_x = start_x + clock_w + div_gap // 2
+            draw.line([(div_x, s(82)), (div_x, s(212))], fill=MID_GRAY, width=max(1, s(1)))
+
+            # Left weather sub-column: Icon on top, condition label right below it
+            icon_cx = start_x + clock_w + div_gap + icon_col_w // 2
+            top_row_y = hero_cy - s(16)
+            bot_row_y = hero_cy + s(26)
+            self._draw_weather_icon(draw, icon_cx, top_row_y, s(24), weather.condition)
+            draw.text((icon_cx, bot_row_y), weather.label, font=cond_font, fill=DARK_GRAY, anchor="mm")
+
+            # Right weather sub-column: Big Temp on top, ↑max ↓min aligned right beside condition label
+            rx_temp = start_x + clock_w + div_gap + icon_col_w + col_gap
+            draw.text((rx_temp, top_row_y), temp_str, font=temp_font, fill=BLACK, anchor="lm")
             self._draw_minmax_arrows(
                 draw,
-                wx_box_x + s(76),
-                hero_cy + s(20),
+                rx_temp,
+                bot_row_y,
                 weather.temp_max,
                 weather.temp_min,
                 mm_font,
@@ -1041,9 +1064,6 @@ class DeskBuddyRenderer:
                 s,
                 align_right=False,
             )
-
-            cond_font = self.fonts.get(s(15), bold=False)
-            draw.text((wx_box_x + s(32), hero_cy + s(40)), weather.label, font=cond_font, fill=DARK_GRAY, anchor="mm")
         else:
             clock_size = s(136) if self.settings.time_format == "24h" else s(108)
             clock_font = self.fonts.get(clock_size, bold=True)
