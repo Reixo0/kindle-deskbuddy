@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from .config import Settings
+from .lyrics import LyricsService
 from .spotify_client import DeviceItem, MediaItem, PlaybackState, SpotifyBackend
 
 
@@ -66,6 +67,7 @@ class DeskBuddyState:
     def __init__(self, settings: Settings, spotify: SpotifyBackend) -> None:
         self.settings = settings
         self.spotify = spotify
+        self.lyrics = LyricsService(demo_mode=spotify.is_demo)
         self._lock = threading.RLock()
 
         now = time.monotonic()

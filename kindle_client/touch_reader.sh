@@ -160,23 +160,18 @@ while true do
         local t = ev.type
         local c = ev.code
         local v = ev.value
-        if t == 3 and c == 53 then
-            seen_mt = true; tx = v; touching = true
-        elseif t == 3 and c == 54 then
-            seen_mt = true; ty = v; touching = true
+        if t == 3 and (c == 53 or c == 0) then
+            tx = v; touching = true
+        elseif t == 3 and (c == 54 or c == 1) then
+            ty = v; touching = true
         elseif t == 3 and c == 57 then
-            seen_mt = true
             if v >= 0 then
                 touching = true
             elseif touching and tx >= 0 and ty >= 0 then
                 emit(ev.tv_sec, ev.tv_usec, tx, ty)
                 touching = false; tx = -1; ty = -1
             end
-        elseif not seen_mt and t == 3 and c == 0 then
-            tx = v; touching = true
-        elseif not seen_mt and t == 3 and c == 1 then
-            ty = v; touching = true
-        elseif not seen_mt and t == 1 and c == 330 then
+        elseif t == 1 and c == 330 then
             if v == 1 then
                 touching = true
             elseif v == 0 and touching and tx >= 0 and ty >= 0 then

@@ -128,6 +128,17 @@ class TestStateMachine(unittest.TestCase):
         self.state._execute_action("toggle_brightness", {})
         self.assertEqual(self.state.view, ViewMode.NOW_PLAYING)
 
+    def test_lyrics_lrc_parsing(self) -> None:
+        from pi_server.lyrics import get_synced_window, parse_lrc
+
+        lrc = "[00:10.00] First line\n[00:25.50] Second line\n[00:40.00] Third line\n"
+        parsed = parse_lrc(lrc)
+        self.assertEqual(len(parsed), 3)
+        prev_l, cur_l, next_l = get_synced_window(parsed, 26000)
+        self.assertEqual(prev_l, "First line")
+        self.assertEqual(cur_l, "Second line")
+        self.assertEqual(next_l, "Third line")
+
 
 class TestRendererOptional(unittest.TestCase):
     def test_render_all_views_if_pillow_installed(self) -> None:
