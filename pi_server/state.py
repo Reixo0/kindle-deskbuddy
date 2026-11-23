@@ -240,7 +240,7 @@ class DeskBuddyState:
                     "view": self.view.value,
                 }
 
-            result = self._execute_action(matched.action, matched.payload)
+            result = self._execute_action(matched.action, matched.payload, tap_x=x, tap_y=y)
             res_dict: dict[str, Any] = {
                 "ok": result.get("ok", True),
                 "action": matched.action,
@@ -254,7 +254,13 @@ class DeskBuddyState:
                 res_dict["brightness"] = result["brightness"]
             return res_dict
 
-    def _execute_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_action(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        tap_x: int = 0,
+        tap_y: int = 0,
+    ) -> dict[str, Any]:
         if action == "exit":
             return {"ok": True, "exit": True, "message": "Exiting Desk Buddy"}
 
@@ -358,10 +364,25 @@ class DeskBuddyState:
             self.refresh_playback()
             return {"ok": res.ok, "message": res.message}
 
-        if action == "open_album":
+        if action == "seek":
+            bar_x1 = int(payload.get("x1", 0))
+            bar_x2 = int(payload.get("x2", 1))
+            if bar_x2 > bar_x1 and self.playback.duration_ms > 0:
+                ratio = max(0.0, min(1.0, (tap_x - bar_x1) / float(bar_x2 - bar_x1)))
+                target_ms = int(self.playback.duration_ms * ratio)
+                res = self.spotify.seek_track(target_ms)
+                self.set_banner(res.message, ttl=2.0)
+                self.refresh_playback()
+                return {"ok": res.ok, "message": res.message}
+            return {"ok": False, "message": "Nothing playing"}
+
+        if action in ("open_album", "open_collection"):
             item: MediaItem = payload["item"]
             self.selected_album = item
-            self.selected_album_tracks = self.spotify.get_album_tracks(item.id, item.uri)
+            if item.kind == "playlist":
+                self.selected_album_tracks = self.spotify.get_playlist_tracks(item.id, item.uri)
+            else:
+                self.selected_album_tracks = self.spotify.get_album_tracks(item.id, item.uri)
             self._set_view(ViewMode.ALBUM_DETAIL, reset_page=True)
             return {"ok": True, "message": ""}
 

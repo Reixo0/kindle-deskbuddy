@@ -84,9 +84,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         if state.view == ViewMode.IDLE_CLOCK:
             poll_sec = 30
         elif state.view == ViewMode.NOW_PLAYING and state.playback.is_playing:
-            poll_sec = 4
+            poll_sec = 2
         else:
-            poll_sec = 12
+            poll_sec = 10
 
         return Response(
             content=png_bytes,

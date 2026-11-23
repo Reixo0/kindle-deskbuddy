@@ -12,7 +12,7 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .config import Settings
-from .lyrics import get_synced_window
+from .lyrics import get_synced_lines
 from .spotify_client import DeviceItem, MediaItem, PlaybackState
 from .state import BrowseTab, DeskBuddyState, Hitbox, ViewMode
 
@@ -622,20 +622,29 @@ class DeskBuddyRenderer:
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
         y += dev_h + s(14)
 
-        # Progress bar
+        # Progress bar (tap or slide anywhere on the bar to seek)
         prog_y = y
         bar_h = s(10)
         draw.rounded_rectangle([rx, prog_y, rx + rw, prog_y + bar_h], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        thumb_x = rx
         if pb.duration_ms > 0:
             ratio = max(0.0, min(1.0, pb.progress_ms / pb.duration_ms))
             fill_w = int(rw * ratio)
+            thumb_x = rx + fill_w
             if fill_w > s(4):
                 draw.rounded_rectangle([rx, prog_y, rx + fill_w, prog_y + bar_h], radius=s(4), fill=BLACK)
+            # Crisp thumb knob so the bar looks interactive
+            knob_r = s(7)
+            knob_cy = prog_y + bar_h // 2
+            draw.ellipse([thumb_x - knob_r, knob_cy - knob_r, thumb_x + knob_r, knob_cy + knob_r], fill=BLACK, outline=WHITE, width=max(1, s(2)))
+        # Generous vertical touch zone for easy tapping/sliding on e-ink
+        add_box(rx - s(8), prog_y - s(12), rx + rw + s(8), prog_y + bar_h + s(20), "seek", x1=rx, x2=rx + rw)
+
         time_font = self.fonts.get(s(13), bold=False)
-        draw.text((rx, prog_y + bar_h + s(4)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
+        draw.text((rx, prog_y + bar_h + s(6)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
         dur_str = _format_ms(pb.duration_ms)
-        draw.text((rx + rw - int(draw.textlength(dur_str, font=time_font)), prog_y + bar_h + s(4)), dur_str, font=time_font, fill=DARK_GRAY)
-        y = prog_y + s(32)
+        draw.text((rx + rw - int(draw.textlength(dur_str, font=time_font)), prog_y + bar_h + s(6)), dur_str, font=time_font, fill=DARK_GRAY)
+        y = prog_y + s(34)
 
         # Transport Controls: [ Prev ] [ Play / Pause ] [ Next ]
         gap = s(12)
@@ -716,9 +725,9 @@ class DeskBuddyRenderer:
             if fw > s(4):
                 draw.rounded_rectangle([vbar_x1, m_y1, vbar_x1 + fw, m_y2], radius=s(4), fill=BLACK)
 
-        # Synced Lyrics cleanly at the bottom of the right column
-        lyrics_y = vol_y + vol_h + s(16)
-        lyrics_h = (art_y + art_size) - lyrics_y
+        # Synced Lyrics filling all remaining space below Volume down to the bottom margin
+        lyrics_y = vol_y + vol_h + s(14)
+        lyrics_h = (h - s(14)) - lyrics_y
         if pb.has_track and lyrics_h >= s(40):
             self._render_lyrics_snippet(draw, state, rx, lyrics_y, rw, lyrics_h, s)
 
@@ -737,43 +746,57 @@ class DeskBuddyRenderer:
         if entry is None:
             return
 
+        prev_line = ""
         cur_line = ""
-        next_line = ""
+        upcoming: list[str] = []
         if entry.instrumental:
             cur_line = "Instrumental"
         elif entry.synced:
-            _, cur_line, next_line = get_synced_window(entry.synced, pb.progress_ms)
+            prev_line, cur_line, upcoming = get_synced_lines(entry.synced, pb.progress_ms, upcoming_count=5)
         elif entry.plain and pb.duration_ms > 0:
             ratio = max(0.0, min(0.99, pb.progress_ms / pb.duration_ms))
             idx = int(len(entry.plain) * ratio)
+            prev_line = entry.plain[idx - 1] if idx > 0 else ""
             cur_line = entry.plain[idx]
-            next_line = entry.plain[idx + 1] if idx + 1 < len(entry.plain) else ""
+            upcoming = entry.plain[idx + 1 : idx + 5]
 
-        if not cur_line and not next_line:
+        if not cur_line and not upcoming:
             return
 
-        # Crisp left accent bar + current line (bold black) + upcoming line (gray)
+        # Crisp left accent bar + previous line (muted) + current line (bold) + multiple upcoming lines
         bar_w = max(2, s(3))
         tx = x + bar_w + s(10)
         tw = w - bar_w - s(10)
-
-        cur_text = cur_line or next_line
-        cur_font = self.fonts.for_text(cur_text, s(17), bold=True)
-        cur_lines = _wrap_text(draw, cur_text, cur_font, tw, max_lines=2 if h >= s(64) else 1)
-
+        max_y = y + h
         cy = y + s(2)
-        for ln in cur_lines:
-            if cy + s(20) > y + h:
-                break
-            draw.text((tx, cy), ln, font=cur_font, fill=BLACK)
-            cy += s(22)
 
-        if cur_line and next_line and (cy + s(18) <= y + h):
-            next_font = self.fonts.for_text(next_line, s(14), bold=False)
-            draw.text((tx, cy + s(2)), _truncate_text(draw, next_line, next_font, tw), font=next_font, fill=DARK_GRAY)
+        # Show previous line subtly when we have generous vertical space
+        if prev_line and h >= s(96):
+            prev_font = self.fonts.for_text(prev_line, s(14), bold=False)
+            draw.text((tx, cy), _truncate_text(draw, prev_line, prev_font, tw), font=prev_font, fill=MID_GRAY)
             cy += s(20)
 
-        draw.rectangle([x, y + s(2), x + bar_w, min(y + h, cy)], fill=BLACK)
+        # Current line (bold black, wrapped up to 2 lines)
+        cur_text = cur_line or upcoming[0]
+        cur_font = self.fonts.for_text(cur_text, s(18), bold=True)
+        cur_lines = _wrap_text(draw, cur_text, cur_font, tw, max_lines=2)
+        for ln in cur_lines:
+            if cy + s(20) > max_y:
+                break
+            draw.text((tx, cy), ln, font=cur_font, fill=BLACK)
+            cy += s(23)
+
+        # Fill remaining space with upcoming lines
+        rest = upcoming if cur_line else upcoming[1:]
+        for idx, uline in enumerate(rest):
+            if cy + s(18) > max_y:
+                break
+            u_font = self.fonts.for_text(uline, s(15), bold=False)
+            shade = DARK_GRAY if idx < 2 else MID_GRAY
+            draw.text((tx, cy + s(2)), _truncate_text(draw, uline, u_font, tw), font=u_font, fill=shade)
+            cy += s(21)
+
+        draw.rectangle([x, y + s(2), x + bar_w, min(max_y, cy)], fill=BLACK)
 
     # ------------------------------------------------------------------
     # 2. IDLE CLOCK VIEW (Clock is main focus + quick song/album selector!)
@@ -953,15 +976,16 @@ class DeskBuddyRenderer:
                 cy = (ry1 + ry2) // 2
                 title_font = self.fonts.for_text(item.title, s(19), bold=True)
                 sub_font = self.fonts.for_text(item.subtitle, s(15), bold=False)
-                if item.kind == "album":
-                    # Right-side Play button + main area opens Album Tracks
+                if item.kind in ("album", "playlist"):
+                    # Right-side Play button + main area opens tracklist
                     play_w = s(96)
                     play_box = (rx2 - play_w - s(10), ry1 + s(10), rx2 - s(10), ry2 - s(10))
                     self._draw_pill_button(draw, play_box, "Play", btn_font, active=True, radius=s(7))
                     text_max = (play_box[0] - rx1) - s(28)
                     draw.text((rx1 + s(16), cy - s(11)), _truncate_text(draw, item.title, title_font, text_max), font=title_font, fill=BLACK, anchor="lm")
-                    draw.text((rx1 + s(16), cy + s(13)), _truncate_text(draw, f"{item.subtitle}  ·  Tap for tracks", sub_font, text_max), font=sub_font, fill=DARK_GRAY, anchor="lm")
-                    add_box(rx1, ry1, play_box[0] - s(4), ry2, "open_album", item=item)
+                    sub_txt = f"{item.subtitle}  ·  Tap for tracks" if item.subtitle else "Tap for tracks"
+                    draw.text((rx1 + s(16), cy + s(13)), _truncate_text(draw, sub_txt, sub_font, text_max), font=sub_font, fill=DARK_GRAY, anchor="lm")
+                    add_box(rx1, ry1, play_box[0] - s(4), ry2, "open_collection", item=item)
                     add_box(*play_box, "play_item", item=item)
                 else:
                     text_max = (rx2 - rx1) - s(90)
@@ -994,8 +1018,9 @@ class DeskBuddyRenderer:
         self._draw_pill_button(draw, back_box, "< Back", btn_font, active=False, radius=s(7))
         add_box(*back_box, "nav", view=ViewMode.BROWSE.value)
 
-        play_box = (w - s(156), header_y1, w - s(18), header_y2)
-        self._draw_pill_button(draw, play_box, "Play Album", btn_font, active=True, radius=s(7))
+        play_label = "Play Playlist" if (album and album.kind == "playlist") else "Play Album"
+        play_box = (w - s(164), header_y1, w - s(18), header_y2)
+        self._draw_pill_button(draw, play_box, play_label, btn_font, active=True, radius=s(7))
         if album:
             add_box(*play_box, "play_item", item=album)
 

@@ -139,6 +139,19 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(cur_l, "Second line")
         self.assertEqual(next_l, "Third line")
 
+    def test_seek_and_playlist_tracks(self) -> None:
+        self.state.refresh_playback()
+        # Seek to 50% of progress bar [400..700] -> tap_x=550
+        res = self.state._execute_action("seek", {"x1": 400, "x2": 700}, tap_x=550, tap_y=200)
+        self.assertTrue(res["ok"])
+        expected = self.state.playback.duration_ms // 2
+        self.assertAlmostEqual(self.state.playback.progress_ms, expected, delta=2500)
+
+        playlists = self.state.get_browse_items(BrowseTab.PLAYLISTS)
+        self.state._execute_action("open_collection", {"item": playlists[0]})
+        self.assertEqual(self.state.view, ViewMode.ALBUM_DETAIL)
+        self.assertTrue(len(self.state.selected_album_tracks) > 0)
+
 
 class TestRendererOptional(unittest.TestCase):
     def test_render_all_views_if_pillow_installed(self) -> None:

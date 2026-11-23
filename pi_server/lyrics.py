@@ -48,8 +48,18 @@ def get_synced_window(
     progress_ms: int,
 ) -> tuple[str, str, str]:
     """Return (prev_line, current_line, next_line) for the given playback position."""
+    prev_line, cur_line, upcoming = get_synced_lines(synced, progress_ms, upcoming_count=1)
+    return prev_line, cur_line, (upcoming[0] if upcoming else "")
+
+
+def get_synced_lines(
+    synced: list[tuple[int, str]],
+    progress_ms: int,
+    upcoming_count: int = 4,
+) -> tuple[str, str, list[str]]:
+    """Return (prev_line, current_line, upcoming_lines) for the given playback position."""
     if not synced:
-        return "", "", ""
+        return "", "", []
     idx = -1
     for i, (ts, _) in enumerate(synced):
         if ts <= progress_ms + 800:  # slight 0.8s lookahead compensates for e-ink poll delay
@@ -57,11 +67,11 @@ def get_synced_window(
         else:
             break
     if idx < 0:
-        return "", "", synced[0][1]
+        return "", "", [line for _, line in synced[:upcoming_count]]
     prev_line = synced[idx - 1][1] if idx > 0 else ""
     cur_line = synced[idx][1]
-    next_line = synced[idx + 1][1] if idx + 1 < len(synced) else ""
-    return prev_line, cur_line, next_line
+    upcoming = [line for _, line in synced[idx + 1 : idx + 1 + upcoming_count]]
+    return prev_line, cur_line, upcoming
 
 
 class LyricsService:

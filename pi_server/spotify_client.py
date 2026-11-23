@@ -91,10 +91,12 @@ class SpotifyBackend(Protocol):
     def adjust_volume(self, delta: int) -> ActionResult: ...
     def toggle_shuffle(self) -> ActionResult: ...
     def toggle_like(self) -> ActionResult: ...
+    def seek_track(self, position_ms: int) -> ActionResult: ...
     def get_saved_albums(self, limit: int = 30) -> list[MediaItem]: ...
     def get_album_tracks(self, album_id: str, album_uri: str = "") -> list[MediaItem]: ...
     def get_liked_songs(self, limit: int = 30) -> list[MediaItem]: ...
     def get_playlists(self, limit: int = 30) -> list[MediaItem]: ...
+    def get_playlist_tracks(self, playlist_id: str, playlist_uri: str = "") -> list[MediaItem]: ...
     def get_recently_played(self, limit: int = 20) -> list[MediaItem]: ...
     def get_queue(self) -> tuple[Optional[MediaItem], list[MediaItem]]: ...
     def get_devices(self) -> list[DeviceItem]: ...
@@ -328,6 +330,21 @@ class RealSpotifyService:
             logger.warning("toggle_like error: %s", exc)
             return ActionResult(False, "Could not update Like")
 
+    def seek_track(self, position_ms: int) -> ActionResult:
+        if not self.is_authenticated():
+            return ActionResult(False, "Connect Spotify first")
+        try:
+            pb = self.get_playback()
+            target = max(0, int(position_ms))
+            if pb.duration_ms > 0:
+                target = min(target, max(0, pb.duration_ms - 1000))
+            self._sp.seek_track(target, device_id=pb.device_id or None)
+            mins, secs = divmod(target // 1000, 60)
+            return ActionResult(True, f"Seek {mins}:{secs:02d}")
+        except Exception as exc:
+            logger.warning("seek_track error: %s", exc)
+            return ActionResult(False, "Could not seek track")
+
     def get_saved_albums(self, limit: int = 30) -> list[MediaItem]:
         if not self.is_authenticated():
             return []
@@ -429,6 +446,32 @@ class RealSpotifyService:
             return items
         except Exception as exc:
             logger.warning("get_playlists error: %s", exc)
+            return []
+
+    def get_playlist_tracks(self, playlist_id: str, playlist_uri: str = "") -> list[MediaItem]:
+        if not self.is_authenticated() or not playlist_id:
+            return []
+        try:
+            res = self._sp.playlist_items(playlist_id, limit=50, additional_types=("track",)) or {}
+            items: list[MediaItem] = []
+            for idx, entry in enumerate(res.get("items", [])):
+                tr = (entry or {}).get("track") or {}
+                if not tr or not tr.get("uri"):
+                    continue
+                artists = ", ".join(a.get("name", "") for a in tr.get("artists", []) if a.get("name"))
+                items.append(
+                    MediaItem(
+                        id=tr.get("id", ""),
+                        uri=tr.get("uri", ""),
+                        title=f"{idx + 1}. {tr.get('name', 'Unknown Track')}",
+                        subtitle=artists,
+                        kind="track",
+                        context_uri=playlist_uri,
+                    )
+                )
+            return items
+        except Exception as exc:
+            logger.warning("get_playlist_tracks error: %s", exc)
             return []
 
     def get_recently_played(self, limit: int = 20) -> list[MediaItem]:
@@ -698,6 +741,13 @@ class DemoSpotifyService:
         tr.liked = not tr.liked
         return ActionResult(True, "Added to Liked" if tr.liked else "Removed from Liked")
 
+    def seek_track(self, position_ms: int) -> ActionResult:
+        cur = self._tracks[self._index]
+        self._progress_ms = max(0, min(cur.duration_ms - 1000, int(position_ms)))
+        self._last_tick = time.monotonic()
+        mins, secs = divmod(self._progress_ms // 1000, 60)
+        return ActionResult(True, f"Seek {mins}:{secs:02d}")
+
     def get_saved_albums(self, limit: int = 30) -> list[MediaItem]:
         return self._albums[:limit]
 
@@ -724,6 +774,19 @@ class DemoSpotifyService:
 
     def get_playlists(self, limit: int = 30) -> list[MediaItem]:
         return self._playlists[:limit]
+
+    def get_playlist_tracks(self, playlist_id: str, playlist_uri: str = "") -> list[MediaItem]:
+        return [
+            MediaItem(
+                id=t.id,
+                uri=t.uri,
+                title=f"{i + 1}. {t.title}",
+                subtitle=t.artist,
+                kind="track",
+                context_uri=playlist_uri,
+            )
+            for i, t in enumerate(self._tracks)
+        ]
 
     def get_recently_played(self, limit: int = 20) -> list[MediaItem]:
         return [
