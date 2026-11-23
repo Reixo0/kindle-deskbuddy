@@ -252,21 +252,32 @@ export TOUCH_INVERT_X="${TOUCH_INVERT_X:-0}"
 export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
 
 (
-    CORNER_TAPS=0
-    CORNER_START=0
+    EXIT_TAPS=0
+    EXIT_START=0
     TOUCH_PID_FILE="$TOUCH_PID_FILE" sh "$SCRIPT_DIR/touch_reader.sh" "$TOUCH_DEV" "$FB_W" "$FB_H" 2>>"$LOG_FILE" | while read -r TX TY; do
         [ -z "$TX" ] && continue
 
-        # Secret exit gesture: 4 quick taps in the native top-left 60x60 corner within 4 seconds
-        if [ "$TX" -lt 60 ] && [ "$TY" -lt 60 ]; then
+        # Failsafe local exit (works even if Pi is offline or returning errors):
+        # Double-tap the top-right 'X' corner of the landscape screen within 3 seconds.
+        IN_EXIT_CORNER="0"
+        if [ "$ROTATION" = "90" ] && [ "$TX" -gt $((FB_W - 90)) ] && [ "$TY" -gt $((FB_H - 90)) ]; then
+            IN_EXIT_CORNER="1"
+        elif [ "$ROTATION" = "270" ] && [ "$TX" -lt 90 ] && [ "$TY" -lt 90 ]; then
+            IN_EXIT_CORNER="1"
+        elif [ "$ROTATION" = "0" ] && [ "$TX" -gt $((FB_W - 90)) ] && [ "$TY" -lt 90 ]; then
+            IN_EXIT_CORNER="1"
+        fi
+
+        if [ "$IN_EXIT_CORNER" = "1" ]; then
             NOW="$(date +%s)"
-            if [ $((NOW - CORNER_START)) -gt 4 ]; then
-                CORNER_TAPS=1
-                CORNER_START="$NOW"
+            if [ $((NOW - EXIT_START)) -gt 3 ]; then
+                EXIT_TAPS=1
+                EXIT_START="$NOW"
             else
-                CORNER_TAPS=$((CORNER_TAPS + 1))
+                EXIT_TAPS=$((EXIT_TAPS + 1))
             fi
-            if [ "$CORNER_TAPS" -ge 4 ]; then
+            if [ "$EXIT_TAPS" -ge 2 ]; then
+                log "Local failsafe double-tap exit triggered"
                 : > "$EXIT_FLAG"
                 break
             fi
@@ -292,6 +303,7 @@ TOUCH_PID="$!"
 
 LAST_HASH=""
 PARTIAL_COUNT=0
+FAIL_COUNT=0
 POLL_SEC=10
 HAS_USLEEP="0"
 command -v usleep >/dev/null 2>&1 && HAS_USLEEP="1"
@@ -304,6 +316,7 @@ while [ ! -f "$EXIT_FLAG" ]; do
     SCREEN_URL="${PI_URL}/api/screen.png?w=${FB_W}&h=${FB_H}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}${BRIGHT_PARAM}"
 
     if http_get_screen "$SCREEN_URL"; then
+        FAIL_COUNT=0
         mv -f "$IMG_FILE.tmp" "$IMG_FILE"
         NEW_HASH="$(grep -i '^X-DeskBuddy-Hash:' "$HDR_FILE" 2>/dev/null | awk '{print $2}' | tr -d '\r\n')"
         REFRESH_HINT="$(grep -i '^X-DeskBuddy-Refresh:' "$HDR_FILE" 2>/dev/null | awk '{print $2}' | tr -d '\r\n')"
@@ -321,8 +334,15 @@ while [ ! -f "$EXIT_FLAG" ]; do
             fi
         fi
     else
-        log "HTTP fetch failed for $SCREEN_URL"
-        POLL_SEC=10
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        log "HTTP fetch failed ($FAIL_COUNT) for $SCREEN_URL"
+        if [ "$FAIL_COUNT" -eq 2 ] && [ -n "$FBINK" ]; then
+            "$FBINK" -q -c -f >/dev/null 2>&1 || true
+            "$FBINK" -q -y 3 "Desk Buddy: Cannot reach Pi" >/dev/null 2>&1 || true
+            "$FBINK" -q -y 5 "URL: ${PI_URL}" >/dev/null 2>&1 || true
+            "$FBINK" -q -y 8 "Double-tap top-right corner to exit" >/dev/null 2>&1 || true
+        fi
+        POLL_SEC=6
     fi
 
     # Wait up to POLL_SEC seconds, waking immediately (<250ms) on any touch event

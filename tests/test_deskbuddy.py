@@ -142,7 +142,7 @@ class TestStateMachine(unittest.TestCase):
     def test_seek_and_playlist_tracks(self) -> None:
         self.state.refresh_playback()
         # Seek to 50% of progress bar [400..700] -> tap_x=550
-        res = self.state._execute_action("seek", {"x1": 400, "x2": 700}, tap_x=550, tap_y=200)
+        res = self.state._execute_action("seek", {"bar_x1": 400, "bar_x2": 700}, tap_x=550, tap_y=200)
         self.assertTrue(res["ok"])
         expected = self.state.playback.duration_ms // 2
         self.assertAlmostEqual(self.state.playback.progress_ms, expected, delta=2500)

@@ -638,7 +638,7 @@ class DeskBuddyRenderer:
             knob_cy = prog_y + bar_h // 2
             draw.ellipse([thumb_x - knob_r, knob_cy - knob_r, thumb_x + knob_r, knob_cy + knob_r], fill=BLACK, outline=WHITE, width=max(1, s(2)))
         # Generous vertical touch zone for easy tapping/sliding on e-ink
-        add_box(rx - s(8), prog_y - s(12), rx + rw + s(8), prog_y + bar_h + s(20), "seek", x1=rx, x2=rx + rw)
+        add_box(rx - s(8), prog_y - s(12), rx + rw + s(8), prog_y + bar_h + s(20), "seek", bar_x1=rx, bar_x2=rx + rw)
 
         time_font = self.fonts.get(s(13), bold=False)
         draw.text((rx, prog_y + bar_h + s(6)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)

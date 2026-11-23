@@ -365,8 +365,8 @@ class DeskBuddyState:
             return {"ok": res.ok, "message": res.message}
 
         if action == "seek":
-            bar_x1 = int(payload.get("x1", 0))
-            bar_x2 = int(payload.get("x2", 1))
+            bar_x1 = int(payload.get("bar_x1", 0))
+            bar_x2 = int(payload.get("bar_x2", 1))
             if bar_x2 > bar_x1 and self.playback.duration_ms > 0:
                 ratio = max(0.0, min(1.0, (tap_x - bar_x1) / float(bar_x2 - bar_x1)))
                 target_ms = int(self.playback.duration_ms * ratio)
