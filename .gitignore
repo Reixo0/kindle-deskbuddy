@@ -1,6 +1,7 @@
 # Secrets & local config (never commit these!)
 .env
 .spotify_cache
+.recent_history.json
 kindle_client/deskbuddy.conf
 
 # Python virtual environment & caches

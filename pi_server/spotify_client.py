@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Protocol
 
 from .config import Settings
@@ -127,6 +129,52 @@ class _ArtCache:
             self._data.popitem(last=False)
 
 
+class _RecentHistory:
+    """Persists recently played playlist/album IDs locally so Standby Clock updates instantly."""
+
+    def __init__(self, path: Path, max_items: int = 20) -> None:
+        self._path = path
+        self._max = max_items
+        self._playlists: list[str] = []
+        self._albums: list[str] = []
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            if self._path.is_file():
+                data = json.loads(self._path.read_text(encoding="utf-8"))
+                self._playlists = [str(x) for x in data.get("playlists", []) if x][: self._max]
+                self._albums = [str(x) for x in data.get("albums", []) if x][: self._max]
+        except Exception:
+            pass
+
+    def _save(self) -> None:
+        try:
+            self._path.write_text(
+                json.dumps({"playlists": self._playlists, "albums": self._albums}),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def record(self, kind: str, item_id: str) -> None:
+        if not item_id:
+            return
+        lst = self._playlists if kind == "playlist" else self._albums if kind == "album" else None
+        if lst is None:
+            return
+        if lst and lst[0] == item_id:
+            return
+        if item_id in lst:
+            lst.remove(item_id)
+        lst.insert(0, item_id)
+        del lst[self._max :]
+        self._save()
+
+    def get(self, kind: str) -> list[str]:
+        return list(self._playlists if kind == "playlist" else self._albums)
+
+
 class RealSpotifyService:
     """Live Spotify Web API client backed by Spotipy."""
 
@@ -147,6 +195,7 @@ class RealSpotifyService:
         )
         self._sp = spotipy.Spotify(auth_manager=self._auth, requests_timeout=8)
         self._art_cache = _ArtCache()
+        self._history = _RecentHistory(settings.spotify_cache_path.parent / ".recent_history.json")
         self._liked_cache: dict[str, tuple[bool, float]] = {}
         self._last_playback = PlaybackState(authenticated=self.is_authenticated())
 
@@ -218,6 +267,11 @@ class RealSpotifyService:
 
         item = data.get("item") or {}
         device = data.get("device") or {}
+        ctx = data.get("context") or {}
+        ctx_type = ctx.get("type")
+        ctx_uri = ctx.get("uri") or ""
+        if data.get("is_playing") and ctx_type in ("playlist", "album") and ctx_uri:
+            self._history.record(ctx_type, ctx_uri.rsplit(":", 1)[-1])
         artists = ", ".join(a.get("name", "") for a in item.get("artists", []) if a.get("name"))
         album = item.get("album") or {}
         images = album.get("images") or []
@@ -519,8 +573,39 @@ class RealSpotifyService:
     def get_recent_albums(self, limit: int = 4) -> list[MediaItem]:
         if not self.is_authenticated():
             return []
+        saved = self.get_saved_albums(limit=50)
+        by_id = {a.id: a for a in saved if a.id}
         items: list[MediaItem] = []
         seen: set[str] = set()
+
+        # 1. Local live history (updates immediately when played)
+        for aid in self._history.get("album"):
+            if aid in seen:
+                continue
+            if aid in by_id:
+                seen.add(aid)
+                items.append(by_id[aid])
+            else:
+                try:
+                    alb = self._sp.album(aid) or {}
+                    if alb.get("name"):
+                        artists = ", ".join(a.get("name", "") for a in alb.get("artists", []) if a.get("name"))
+                        seen.add(aid)
+                        items.append(
+                            MediaItem(
+                                id=aid,
+                                uri=alb.get("uri", f"spotify:album:{aid}"),
+                                title=alb.get("name", "Unknown Album"),
+                                subtitle=artists,
+                                kind="album",
+                            )
+                        )
+                except Exception:
+                    pass
+            if len(items) >= limit:
+                return items
+
+        # 2. Spotify recently played tracks' albums
         try:
             res = self._sp.current_user_recently_played(limit=50) or {}
             for entry in res.get("items", []):
@@ -545,8 +630,8 @@ class RealSpotifyService:
         except Exception as exc:
             logger.warning("get_recent_albums error: %s", exc)
 
-        # Fill remaining slots from saved albums so the grid always has up to 4 items
-        for alb in self.get_saved_albums(limit=limit * 2):
+        # 3. Fill remaining slots from saved albums
+        for alb in saved:
             if alb.id not in seen:
                 seen.add(alb.id)
                 items.append(alb)
@@ -558,10 +643,41 @@ class RealSpotifyService:
         if not self.is_authenticated():
             return []
         user_playlists = self.get_playlists(limit=50)
-        by_uri = {p.uri: p for p in user_playlists if p.uri}
+        by_id = {p.id: p for p in user_playlists if p.id}
         items: list[MediaItem] = []
-        seen_uris: set[str] = set()
+        seen_ids: set[str] = set()
 
+        def _add_playlist_id(pid: str, fallback_uri: str = "") -> None:
+            if not pid or pid in seen_ids:
+                return
+            if pid in by_id:
+                seen_ids.add(pid)
+                items.append(by_id[pid])
+                return
+            try:
+                pl = self._sp.playlist(pid, fields="id,uri,name,owner(display_name)") or {}
+                if pl.get("name"):
+                    owner = (pl.get("owner") or {}).get("display_name", "")
+                    seen_ids.add(pid)
+                    items.append(
+                        MediaItem(
+                            id=pl.get("id", pid),
+                            uri=pl.get("uri", fallback_uri or f"spotify:playlist:{pid}"),
+                            title=pl.get("name", "Playlist"),
+                            subtitle=owner or "Playlist",
+                            kind="playlist",
+                        )
+                    )
+            except Exception:
+                pass
+
+        # 1. Local live history (updates immediately when played on Kindle or any Spotify device)
+        for pid in self._history.get("playlist"):
+            _add_playlist_id(pid)
+            if len(items) >= limit:
+                return items
+
+        # 2. Spotify recently played contexts (matched by playlist ID, not full URI string)
         try:
             res = self._sp.current_user_recently_played(limit=50) or {}
             for entry in res.get("items", []):
@@ -569,37 +685,17 @@ class RealSpotifyService:
                 if ctx.get("type") != "playlist":
                     continue
                 uri = ctx.get("uri", "")
-                if not uri or uri in seen_uris:
-                    continue
-                seen_uris.add(uri)
-                if uri in by_uri:
-                    items.append(by_uri[uri])
-                else:
-                    pid = uri.rsplit(":", 1)[-1]
-                    try:
-                        pl = self._sp.playlist(pid, fields="id,uri,name,owner(display_name)") or {}
-                        if pl.get("name"):
-                            owner = (pl.get("owner") or {}).get("display_name", "")
-                            items.append(
-                                MediaItem(
-                                    id=pl.get("id", pid),
-                                    uri=pl.get("uri", uri),
-                                    title=pl.get("name", "Playlist"),
-                                    subtitle=owner or "Playlist",
-                                    kind="playlist",
-                                )
-                            )
-                    except Exception:
-                        pass
+                pid = uri.rsplit(":", 1)[-1] if uri else ""
+                _add_playlist_id(pid, fallback_uri=uri)
                 if len(items) >= limit:
                     return items
         except Exception as exc:
             logger.warning("get_recent_playlists error: %s", exc)
 
-        # Fill remaining slots from user's playlists
+        # 3. Fill remaining slots from user's playlists
         for pl in user_playlists:
-            if pl.uri not in seen_uris:
-                seen_uris.add(pl.uri)
+            if pl.id not in seen_ids:
+                seen_ids.add(pl.id)
                 items.append(pl)
                 if len(items) >= limit:
                     break
@@ -667,12 +763,17 @@ class RealSpotifyService:
                 return ActionResult(False, "No Spotify device — open Spotify on a device")
             if item.kind in ("album", "playlist"):
                 self._sp.start_playback(device_id=device_id, context_uri=item.uri)
+                self._history.record(item.kind, item.id or item.uri.rsplit(":", 1)[-1])
             elif item.context_uri:
                 self._sp.start_playback(
                     device_id=device_id,
                     context_uri=item.context_uri,
                     offset={"uri": item.uri},
                 )
+                if ":playlist:" in item.context_uri:
+                    self._history.record("playlist", item.context_uri.rsplit(":", 1)[-1])
+                elif ":album:" in item.context_uri:
+                    self._history.record("album", item.context_uri.rsplit(":", 1)[-1])
             else:
                 self._sp.start_playback(device_id=device_id, uris=[item.uri])
 

@@ -135,6 +135,8 @@ class DeskBuddyState:
             self.view = new_view
             self.last_view_change_at = time.monotonic()
             self.needs_full_refresh = True
+            if new_view == ViewMode.IDLE_CLOCK:
+                self.invalidate_cache("recent_playlists", "recent_albums")
         if reset_page:
             self.page = 0
 
