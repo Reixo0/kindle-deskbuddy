@@ -426,6 +426,74 @@ class DeskBuddyRenderer:
             y2 = cy + int(math.sin(rad) * r)
             draw.line([(x1, y1), (x2, y2)], fill=color, width=w)
 
+    def _draw_cloud_shape(
+        self,
+        draw: ImageDraw.ImageDraw,
+        cx: int,
+        cy: int,
+        r: int,
+        fill: int = WHITE,
+        outline: int = BLACK,
+    ) -> None:
+        w = max(2, int(r * 0.14))
+        # Build a clean puffy cloud from overlapping circles + flat base
+        base_y = cy + int(r * 0.35)
+        draw.ellipse([cx - int(r * 0.85), cy - int(r * 0.18), cx - int(r * 0.05), base_y], fill=fill, outline=outline, width=w)
+        draw.ellipse([cx - int(r * 0.42), cy - int(r * 0.58), cx + int(r * 0.45), cy + int(r * 0.28)], fill=fill, outline=outline, width=w)
+        draw.ellipse([cx + int(r * 0.05), cy - int(r * 0.25), cx + int(r * 0.85), base_y], fill=fill, outline=outline, width=w)
+        # Clean inner fill & flat bottom line
+        draw.rectangle([cx - int(r * 0.5), cy - int(r * 0.12), cx + int(r * 0.5), base_y - w], fill=fill)
+        draw.line([(cx - int(r * 0.5), base_y), (cx + int(r * 0.5), base_y)], fill=outline, width=w)
+
+    def _draw_weather_icon(
+        self,
+        draw: ImageDraw.ImageDraw,
+        cx: int,
+        cy: int,
+        r: int,
+        condition: str,
+    ) -> None:
+        if condition == "clear":
+            self._draw_sun_icon(draw, cx, cy, r, BLACK)
+            return
+        if condition == "partly_cloudy":
+            self._draw_sun_icon(draw, cx - int(r * 0.32), cy - int(r * 0.28), int(r * 0.56), BLACK)
+            self._draw_cloud_shape(draw, cx + int(r * 0.12), cy + int(r * 0.12), int(r * 0.85), WHITE, BLACK)
+            return
+        if condition == "cloudy":
+            self._draw_cloud_shape(draw, cx, cy, r, WHITE, BLACK)
+            return
+        if condition == "fog":
+            self._draw_cloud_shape(draw, cx, cy - int(r * 0.18), int(r * 0.85), WHITE, BLACK)
+            w = max(2, int(r * 0.12))
+            for dy in (int(r * 0.42), int(r * 0.72)):
+                draw.line([(cx - int(r * 0.65), cy + dy), (cx + int(r * 0.65), cy + dy)], fill=BLACK, width=w)
+            return
+        if condition == "rain":
+            self._draw_cloud_shape(draw, cx, cy - int(r * 0.22), int(r * 0.88), WHITE, BLACK)
+            w = max(2, int(r * 0.13))
+            for dx in (-int(r * 0.38), 0, int(r * 0.38)):
+                draw.line([(cx + dx, cy + int(r * 0.32)), (cx + dx - int(r * 0.16), cy + int(r * 0.76))], fill=BLACK, width=w)
+            return
+        if condition == "snow":
+            self._draw_cloud_shape(draw, cx, cy - int(r * 0.22), int(r * 0.88), WHITE, BLACK)
+            dot = max(2, int(r * 0.12))
+            for dx, dy in ((-0.4, 0.48), (0.0, 0.66), (0.4, 0.48)):
+                px, py = cx + int(r * dx), cy + int(r * dy)
+                draw.ellipse([px - dot, py - dot, px + dot, py + dot], fill=BLACK)
+            return
+        # storm
+        self._draw_cloud_shape(draw, cx, cy - int(r * 0.22), int(r * 0.88), WHITE, BLACK)
+        pts = [
+            (cx + int(r * 0.08), cy + int(r * 0.22)),
+            (cx - int(r * 0.24), cy + int(r * 0.56)),
+            (cx + int(r * 0.02), cy + int(r * 0.56)),
+            (cx - int(r * 0.14), cy + int(r * 0.92)),
+            (cx + int(r * 0.28), cy + int(r * 0.48)),
+            (cx + int(r * 0.02), cy + int(r * 0.48)),
+        ]
+        draw.polygon(pts, fill=BLACK)
+
     def _render_top_bar(
         self,
         draw: ImageDraw.ImageDraw,
@@ -543,17 +611,34 @@ class DeskBuddyRenderer:
         art_x = margin_x
         art_y = content_top + clock_band_h + s(10)
 
-        # Prominent Clock + Date aligned cleanly with album art width
+        # Prominent Clock + Weather (and Date) aligned cleanly with album art width
         clock_str = _format_clock(self.settings.time_format)
-        clock_font_size = s(58) if self.settings.time_format == "24h" else s(44)
+        clock_font_size = s(54) if self.settings.time_format == "24h" else s(42)
         clock_font = self.fonts.get(clock_font_size, bold=True)
         clock_cy = content_top + clock_band_h // 2
         draw.text((art_x, clock_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
 
-        date_str = _format_date()
-        date_font = self.fonts.get(s(20), bold=True)
-        dw = int(draw.textlength(date_str, font=date_font))
-        draw.text((art_x + art_size - dw, clock_cy + s(6)), date_str, font=date_font, fill=DARK_GRAY, anchor="lm")
+        weather = state.weather.get_weather()
+        right_edge = art_x + art_size
+        if weather is not None:
+            temp_str = f"{round(weather.temp)}°"
+            mm_str = f"{round(weather.temp_min)}° / {round(weather.temp_max)}°"
+            temp_font = self.fonts.get(s(28), bold=True)
+            mm_font = self.fonts.get(s(14), bold=True)
+            tw = int(draw.textlength(temp_str, font=temp_font))
+            mw = int(draw.textlength(mm_str, font=mm_font))
+            col_w = max(tw, mw)
+            text_right = right_edge
+            draw.text((text_right - tw, clock_cy - s(11)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
+            draw.text((text_right - mw, clock_cy + s(16)), mm_str, font=mm_font, fill=DARK_GRAY, anchor="lm")
+            icon_cx = text_right - col_w - s(24)
+            self._draw_weather_icon(draw, icon_cx, clock_cy, s(17), weather.condition)
+        else:
+            date_str = _format_date()
+            date_font = self.fonts.get(s(20), bold=True)
+            dw = int(draw.textlength(date_str, font=date_font))
+            draw.text((right_edge - dw, clock_cy + s(6)), date_str, font=date_font, fill=DARK_GRAY, anchor="lm")
+
         draw.line(
             [(art_x, art_y - s(6)), (art_x + art_size, art_y - s(6))],
             fill=MID_GRAY,
@@ -610,16 +695,23 @@ class DeskBuddyRenderer:
             draw.text((rx, y + s(1)), _truncate_text(draw, pb.album_name, album_font, rw), font=album_font, fill=DARK_GRAY)
             y += s(22)
 
-        # Active device pill (tappable shortcut to Devices view)
+        # Active device pill + 1-tap quick-switch device button
         y += s(6)
         dev_h = s(30)
+        cyc_w = s(68)
+        dev_w = rw - cyc_w - s(8)
         dev_label = f"On: {pb.device_name}" if pb.device_name else "Select Device..."
         dev_font = self.fonts.for_text(dev_label, s(15), bold=True)
-        dev_text = _truncate_text(draw, dev_label, dev_font, rw - s(16))
-        dev_box = (rx, y, rx + rw, y + dev_h)
+        dev_text = _truncate_text(draw, dev_label, dev_font, dev_w - s(14))
+        dev_box = (rx, y, rx + dev_w, y + dev_h)
         draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
         draw.text(((dev_box[0] + dev_box[2]) // 2, (dev_box[1] + dev_box[3]) // 2), dev_text, font=dev_font, fill=BLACK, anchor="mm")
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
+
+        cyc_box = (rx + dev_w + s(8), y, rx + rw, y + dev_h)
+        cyc_font = self.fonts.get(s(13), bold=True)
+        self._draw_pill_button(draw, cyc_box, "Switch", cyc_font, active=False, radius=s(7), outline_width=max(1, s(1)))
+        add_box(*cyc_box, "cycle_device")
         y += dev_h + s(14)
 
         # Progress bar (tap or slide anywhere on the bar to seek)
@@ -811,47 +903,86 @@ class DeskBuddyRenderer:
         s,
         add_box,
     ) -> None:
-        # Clean header: Date on left, Devices + Battery + Exit on right
+        # Clean header: Date on left, Device pill + Switch + Brightness + Battery + Exit on right
         header_y = s(28)
-        date_font = self.fonts.get(s(22), bold=True)
-        draw.text((s(24), header_y), _format_date(), font=date_font, fill=BLACK, anchor="lm")
+        date_font = self.fonts.get(s(20), bold=True)
+        draw.text((s(22), header_y), _format_date(), font=date_font, fill=BLACK, anchor="lm")
 
-        dev_btn_font = self.fonts.get(s(15), bold=True)
-        exit_box = (w - s(20) - s(38), s(10), w - s(20), s(46))
+        dev_btn_font = self.fonts.get(s(14), bold=True)
+        exit_box = (w - s(16) - s(38), s(10), w - s(16), s(46))
         self._draw_pill_button(draw, exit_box, "X", dev_btn_font, active=False, radius=s(7))
         add_box(*exit_box, "exit")
 
         left_of_batt = self._draw_battery(
-            draw, exit_box[0] - s(12), header_y, state.kindle_battery, state.kindle_charging, s
+            draw, exit_box[0] - s(10), header_y, state.kindle_battery, state.kindle_charging, s
         )
-        bright_w = s(44)
+        bright_w = s(42)
         bright_box = (left_of_batt - s(8) - bright_w, s(10), left_of_batt - s(8), s(46))
         draw.rounded_rectangle(bright_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(11), BLACK)
         add_box(*bright_box, "toggle_brightness")
 
-        dev_box = (bright_box[0] - s(108), s(10), bright_box[0] - s(10), s(46))
-        self._draw_pill_button(draw, dev_box, "Devices", dev_btn_font, active=False, radius=s(7))
+        # 1-tap Switch Device button + active device name pill (opens full Devices list)
+        sw_w = s(68)
+        sw_box = (bright_box[0] - s(8) - sw_w, s(10), bright_box[0] - s(8), s(46))
+        self._draw_pill_button(draw, sw_box, "Switch", dev_btn_font, active=False, radius=s(7))
+        add_box(*sw_box, "cycle_device")
+
+        dev_name = state.playback.device_name
+        dev_label = f"On: {dev_name}" if dev_name else "Devices"
+        dev_w = min(s(200), max(s(108), int(draw.textlength(dev_label, font=dev_btn_font)) + s(24)))
+        dev_box = (sw_box[0] - s(8) - dev_w, s(10), sw_box[0] - s(8), s(46))
+        draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY if dev_name else WHITE, outline=BLACK, width=max(1, s(2)))
+        draw.text(
+            ((dev_box[0] + dev_box[2]) // 2, header_y),
+            _truncate_text(draw, dev_label, dev_btn_font, dev_w - s(14)),
+            font=dev_btn_font,
+            fill=BLACK,
+            anchor="mm",
+        )
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
 
-        # Hero Clock (the unmistakable centerpiece)
+        # Hero Clock + Weather side-by-side
         clock_str = _format_clock(self.settings.time_format)
-        clock_size = s(136) if self.settings.time_format == "24h" else s(108)
-        clock_font = self.fonts.get(clock_size, bold=True)
-        draw.text((w // 2, s(145)), clock_str, font=clock_font, fill=BLACK, anchor="mm")
+        weather = state.weather.get_weather()
+        hero_cy = s(145)
+        if weather is not None:
+            clock_size = s(126) if self.settings.time_format == "24h" else s(96)
+            clock_font = self.fonts.get(clock_size, bold=True)
+            draw.text((s(36), hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
 
-        sub_font = self.fonts.get(s(16), bold=False)
-        subtitle = "Nothing playing  ·  Pick an album or song below to start"
+            # Weather block on the right side of the hero band
+            wx_box_x = w - s(240)
+            draw.line([(wx_box_x - s(18), s(82)), (wx_box_x - s(18), s(212))], fill=MID_GRAY, width=max(1, s(1)))
+            self._draw_weather_icon(draw, wx_box_x + s(32), hero_cy - s(14), s(26), weather.condition)
+
+            temp_str = f"{round(weather.temp)}°{weather.unit}"
+            temp_font = self.fonts.get(s(40), bold=True)
+            draw.text((wx_box_x + s(76), hero_cy - s(18)), temp_str, font=temp_font, fill=BLACK, anchor="lm")
+
+            mm_str = f"L:{round(weather.temp_min)}°  H:{round(weather.temp_max)}°"
+            mm_font = self.fonts.get(s(17), bold=True)
+            draw.text((wx_box_x + s(76), hero_cy + s(20)), mm_str, font=mm_font, fill=DARK_GRAY, anchor="lm")
+
+            cond_font = self.fonts.get(s(15), bold=False)
+            draw.text((wx_box_x + s(32), hero_cy + s(40)), weather.label, font=cond_font, fill=DARK_GRAY, anchor="mm")
+        else:
+            clock_size = s(136) if self.settings.time_format == "24h" else s(108)
+            clock_font = self.fonts.get(clock_size, bold=True)
+            draw.text((w // 2, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="mm")
+
+        sub_font = self.fonts.get(s(15), bold=False)
+        subtitle = "Standby  ·  Recently played below (tap card to play, or right icon to shuffle)"
         if not state.playback.authenticated:
             subtitle = "Connect Spotify at /auth/login to control playback"
-        draw.text((w // 2, s(232)), subtitle, font=sub_font, fill=DARK_GRAY, anchor="mm")
+        draw.text((w // 2, s(234)), subtitle, font=sub_font, fill=DARK_GRAY, anchor="mm")
 
         # Divider
-        div_y = s(262)
+        div_y = s(260)
         draw.line([(s(24), div_y), (w - s(24), div_y)], fill=BLACK, width=max(1, s(2)))
 
-        # Quick Song & Album Selector right on the Idle Clock screen
-        tab_y1 = div_y + s(14)
+        # Quick Recent Playlists / Albums / Liked Songs Selector right on the Standby Clock screen
+        tab_y1 = div_y + s(12)
         tab_y2 = tab_y1 + s(38)
         tab_font = self.fonts.get(s(16), bold=True)
         idle_tabs = [
@@ -867,17 +998,17 @@ class DeskBuddyRenderer:
             add_box(*box, "idle_tab", tab=tab.value)
             cur_x += bw + s(10)
 
-        # "Full Library ->" button on the right
+        # "Full Library >" button on the right
         lib_label = "Full Library >"
         lib_w = int(draw.textlength(lib_label, font=tab_font)) + s(28)
         lib_box = (w - s(24) - lib_w, tab_y1, w - s(24), tab_y2)
         self._draw_pill_button(draw, lib_box, lib_label, tab_font, active=False, radius=s(7))
         add_box(*lib_box, "browse_tab", tab=state.idle_tab.value)
 
-        # 2x2 grid of quick-launch cards
-        items = state.get_browse_items(state.idle_tab)[:4]
-        grid_top = tab_y2 + s(16)
-        grid_bottom = h - s(20)
+        # 2x2 grid of 4 most recently played playlists/albums (or liked songs)
+        items = state.get_idle_items(state.idle_tab)[:4]
+        grid_top = tab_y2 + s(14)
+        grid_bottom = h - s(18)
         gap = s(14)
         card_w = (w - s(48) - gap) // 2
         card_h = (grid_bottom - grid_top - gap) // 2
@@ -898,20 +1029,30 @@ class DeskBuddyRenderer:
             draw.rounded_rectangle([cx1, cy1, cx2, cy2], radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
 
             # Play badge on left of card
-            badge_r = s(20)
-            bcx = cx1 + s(32)
+            badge_r = s(19)
+            bcx = cx1 + s(30)
             bcy = (cy1 + cy2) // 2
             draw.ellipse([bcx - badge_r, bcy - badge_r, bcx + badge_r, bcy + badge_r], fill=BLACK)
             self._draw_play_icon(draw, bcx + s(2), bcy, s(9), WHITE)
 
-            tx = cx1 + s(64)
-            tw = card_w - s(78)
-            ct_font = self.fonts.for_text(item.title, s(19), bold=True)
-            cs_font = self.fonts.for_text(item.subtitle, s(15), bold=False)
-            draw.text((tx, bcy - s(13)), _truncate_text(draw, item.title, ct_font, tw), font=ct_font, fill=BLACK, anchor="lm")
-            draw.text((tx, bcy + s(15)), _truncate_text(draw, item.subtitle, cs_font, tw), font=cs_font, fill=DARK_GRAY, anchor="lm")
+            tx = cx1 + s(60)
+            if item.kind in ("playlist", "album"):
+                # Right-side shuffle-play button on each playlist/album card
+                sh_w = s(52)
+                sh_box = (cx2 - sh_w - s(8), cy1 + s(10), cx2 - s(8), cy2 - s(10))
+                draw.rounded_rectangle(sh_box, radius=s(8), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(2)))
+                self._draw_shuffle_icon(draw, (sh_box[0] + sh_box[2]) // 2, bcy, s(11), BLACK)
+                tw = (sh_box[0] - tx) - s(8)
+                add_box(cx1, cy1, sh_box[0] - s(4), cy2, "play_item", item=item, shuffle=False)
+                add_box(*sh_box, "play_item", item=item, shuffle=True)
+            else:
+                tw = card_w - s(74)
+                add_box(cx1, cy1, cx2, cy2, "play_item", item=item)
 
-            add_box(cx1, cy1, cx2, cy2, "play_item", item=item)
+            ct_font = self.fonts.for_text(item.title, s(18), bold=True)
+            cs_font = self.fonts.for_text(item.subtitle, s(14), bold=False)
+            draw.text((tx, bcy - s(12)), _truncate_text(draw, item.title, ct_font, tw), font=ct_font, fill=BLACK, anchor="lm")
+            draw.text((tx, bcy + s(14)), _truncate_text(draw, item.subtitle, cs_font, tw), font=cs_font, fill=DARK_GRAY, anchor="lm")
 
     # ------------------------------------------------------------------
     # 3. BROWSE VIEW (Albums, Liked Songs, Playlists, Recent)
@@ -977,16 +1118,23 @@ class DeskBuddyRenderer:
                 title_font = self.fonts.for_text(item.title, s(19), bold=True)
                 sub_font = self.fonts.for_text(item.subtitle, s(15), bold=False)
                 if item.kind in ("album", "playlist"):
-                    # Right-side Play button + main area opens tracklist
-                    play_w = s(96)
+                    # Right-side Shuffle + Play buttons; main row opens tracklist
+                    play_w = s(84)
+                    sh_w = s(52)
                     play_box = (rx2 - play_w - s(10), ry1 + s(10), rx2 - s(10), ry2 - s(10))
+                    sh_box = (play_box[0] - sh_w - s(8), ry1 + s(10), play_box[0] - s(8), ry2 - s(10))
+
                     self._draw_pill_button(draw, play_box, "Play", btn_font, active=True, radius=s(7))
-                    text_max = (play_box[0] - rx1) - s(28)
+                    draw.rounded_rectangle(sh_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(2)))
+                    self._draw_shuffle_icon(draw, (sh_box[0] + sh_box[2]) // 2, cy, s(10), BLACK)
+
+                    text_max = (sh_box[0] - rx1) - s(24)
                     draw.text((rx1 + s(16), cy - s(11)), _truncate_text(draw, item.title, title_font, text_max), font=title_font, fill=BLACK, anchor="lm")
                     sub_txt = f"{item.subtitle}  ·  Tap for tracks" if item.subtitle else "Tap for tracks"
                     draw.text((rx1 + s(16), cy + s(13)), _truncate_text(draw, sub_txt, sub_font, text_max), font=sub_font, fill=DARK_GRAY, anchor="lm")
-                    add_box(rx1, ry1, play_box[0] - s(4), ry2, "open_collection", item=item)
-                    add_box(*play_box, "play_item", item=item)
+                    add_box(rx1, ry1, sh_box[0] - s(4), ry2, "open_collection", item=item)
+                    add_box(*sh_box, "play_item", item=item, shuffle=True)
+                    add_box(*play_box, "play_item", item=item, shuffle=False)
                 else:
                     text_max = (rx2 - rx1) - s(90)
                     draw.text((rx1 + s(16), cy - s(11)), _truncate_text(draw, item.title, title_font, text_max), font=title_font, fill=BLACK, anchor="lm")
@@ -1019,13 +1167,17 @@ class DeskBuddyRenderer:
         add_box(*back_box, "nav", view=ViewMode.BROWSE.value)
 
         play_label = "Play Playlist" if (album and album.kind == "playlist") else "Play Album"
-        play_box = (w - s(164), header_y1, w - s(18), header_y2)
+        play_box = (w - s(156), header_y1, w - s(18), header_y2)
+        sh_box = (play_box[0] - s(56) - s(8), header_y1, play_box[0] - s(8), header_y2)
         self._draw_pill_button(draw, play_box, play_label, btn_font, active=True, radius=s(7))
+        draw.rounded_rectangle(sh_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(2)))
+        self._draw_shuffle_icon(draw, (sh_box[0] + sh_box[2]) // 2, (header_y1 + header_y2) // 2, s(11), BLACK)
         if album:
-            add_box(*play_box, "play_item", item=album)
+            add_box(*play_box, "play_item", item=album, shuffle=False)
+            add_box(*sh_box, "play_item", item=album, shuffle=True)
 
         title_x = back_box[2] + s(16)
-        title_w = play_box[0] - title_x - s(14)
+        title_w = sh_box[0] - title_x - s(12)
         alb_title = album.title if album else "Album"
         alb_sub = album.subtitle if album else ""
         t_font = self.fonts.for_text(alb_title, s(20), bold=True)

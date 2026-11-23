@@ -98,9 +98,11 @@ class SpotifyBackend(Protocol):
     def get_playlists(self, limit: int = 30) -> list[MediaItem]: ...
     def get_playlist_tracks(self, playlist_id: str, playlist_uri: str = "") -> list[MediaItem]: ...
     def get_recently_played(self, limit: int = 20) -> list[MediaItem]: ...
+    def get_recent_albums(self, limit: int = 4) -> list[MediaItem]: ...
+    def get_recent_playlists(self, limit: int = 4) -> list[MediaItem]: ...
     def get_queue(self) -> tuple[Optional[MediaItem], list[MediaItem]]: ...
     def get_devices(self) -> list[DeviceItem]: ...
-    def play_item(self, item: MediaItem) -> ActionResult: ...
+    def play_item(self, item: MediaItem, shuffle: Optional[bool] = None) -> ActionResult: ...
     def transfer_playback(self, device_id: str, force_play: bool = True) -> ActionResult: ...
     def get_album_art_bytes(self, url: str) -> Optional[bytes]: ...
 
@@ -514,6 +516,95 @@ class RealSpotifyService:
             logger.warning("get_recently_played error: %s", exc)
             return []
 
+    def get_recent_albums(self, limit: int = 4) -> list[MediaItem]:
+        if not self.is_authenticated():
+            return []
+        items: list[MediaItem] = []
+        seen: set[str] = set()
+        try:
+            res = self._sp.current_user_recently_played(limit=50) or {}
+            for entry in res.get("items", []):
+                tr = (entry or {}).get("track") or {}
+                alb = tr.get("album") or {}
+                aid = alb.get("id", "")
+                if not aid or aid in seen:
+                    continue
+                seen.add(aid)
+                artists = ", ".join(a.get("name", "") for a in alb.get("artists", []) if a.get("name"))
+                items.append(
+                    MediaItem(
+                        id=aid,
+                        uri=alb.get("uri", ""),
+                        title=alb.get("name", "Unknown Album"),
+                        subtitle=artists,
+                        kind="album",
+                    )
+                )
+                if len(items) >= limit:
+                    return items
+        except Exception as exc:
+            logger.warning("get_recent_albums error: %s", exc)
+
+        # Fill remaining slots from saved albums so the grid always has up to 4 items
+        for alb in self.get_saved_albums(limit=limit * 2):
+            if alb.id not in seen:
+                seen.add(alb.id)
+                items.append(alb)
+                if len(items) >= limit:
+                    break
+        return items[:limit]
+
+    def get_recent_playlists(self, limit: int = 4) -> list[MediaItem]:
+        if not self.is_authenticated():
+            return []
+        user_playlists = self.get_playlists(limit=50)
+        by_uri = {p.uri: p for p in user_playlists if p.uri}
+        items: list[MediaItem] = []
+        seen_uris: set[str] = set()
+
+        try:
+            res = self._sp.current_user_recently_played(limit=50) or {}
+            for entry in res.get("items", []):
+                ctx = (entry or {}).get("context") or {}
+                if ctx.get("type") != "playlist":
+                    continue
+                uri = ctx.get("uri", "")
+                if not uri or uri in seen_uris:
+                    continue
+                seen_uris.add(uri)
+                if uri in by_uri:
+                    items.append(by_uri[uri])
+                else:
+                    pid = uri.rsplit(":", 1)[-1]
+                    try:
+                        pl = self._sp.playlist(pid, fields="id,uri,name,owner(display_name)") or {}
+                        if pl.get("name"):
+                            owner = (pl.get("owner") or {}).get("display_name", "")
+                            items.append(
+                                MediaItem(
+                                    id=pl.get("id", pid),
+                                    uri=pl.get("uri", uri),
+                                    title=pl.get("name", "Playlist"),
+                                    subtitle=owner or "Playlist",
+                                    kind="playlist",
+                                )
+                            )
+                    except Exception:
+                        pass
+                if len(items) >= limit:
+                    return items
+        except Exception as exc:
+            logger.warning("get_recent_playlists error: %s", exc)
+
+        # Fill remaining slots from user's playlists
+        for pl in user_playlists:
+            if pl.uri not in seen_uris:
+                seen_uris.add(pl.uri)
+                items.append(pl)
+                if len(items) >= limit:
+                    break
+        return items[:limit]
+
     def get_queue(self) -> tuple[Optional[MediaItem], list[MediaItem]]:
         if not self.is_authenticated():
             return None, []
@@ -567,13 +658,18 @@ class RealSpotifyService:
             logger.warning("get_devices error: %s", exc)
             return []
 
-    def play_item(self, item: MediaItem) -> ActionResult:
+    def play_item(self, item: MediaItem, shuffle: Optional[bool] = None) -> ActionResult:
         if not self.is_authenticated():
             return ActionResult(False, "Connect Spotify first")
         try:
             device_id = self._last_playback.device_id or self._pick_target_device_id()
             if not device_id:
                 return ActionResult(False, "No Spotify device — open Spotify on a device")
+            if shuffle is not None:
+                try:
+                    self._sp.shuffle(bool(shuffle), device_id=device_id)
+                except Exception:
+                    pass
             if item.kind in ("album", "playlist"):
                 self._sp.start_playback(device_id=device_id, context_uri=item.uri)
             elif item.context_uri:
@@ -584,6 +680,12 @@ class RealSpotifyService:
                 )
             else:
                 self._sp.start_playback(device_id=device_id, uris=[item.uri])
+            if shuffle is True:
+                try:
+                    self._sp.shuffle(True, device_id=device_id)
+                except Exception:
+                    pass
+                return ActionResult(True, f"Shuffling {item.title}")
             return ActionResult(True, f"Playing {item.title}")
         except Exception as exc:
             logger.warning("play_item error: %s", exc)
@@ -806,6 +908,12 @@ class DemoSpotifyService:
             for t in reversed(self._tracks)
         ][:limit]
 
+    def get_recent_albums(self, limit: int = 4) -> list[MediaItem]:
+        return list(reversed(self._albums))[:limit]
+
+    def get_recent_playlists(self, limit: int = 4) -> list[MediaItem]:
+        return list(reversed(self._playlists))[:limit]
+
     def get_queue(self) -> tuple[Optional[MediaItem], list[MediaItem]]:
         cur = self._tracks[self._index]
         current_item = MediaItem(cur.id, cur.uri, cur.title, cur.artist, "track")
@@ -818,23 +926,25 @@ class DemoSpotifyService:
     def get_devices(self) -> list[DeviceItem]:
         return list(self._devices)
 
-    def play_item(self, item: MediaItem) -> ActionResult:
+    def play_item(self, item: MediaItem, shuffle: Optional[bool] = None) -> ActionResult:
+        if shuffle is not None:
+            self._shuffle = bool(shuffle)
         if item.kind == "track":
             for i, t in enumerate(self._tracks):
                 if t.id == item.id or t.uri == item.uri:
                     self._index = i
                     break
         elif item.kind == "album":
-            for i, t in enumerate(self._tracks):
-                if t.album_id == item.id:
-                    self._index = i
-                    break
+            matches = [i for i, t in enumerate(self._tracks) if t.album_id == item.id]
+            if matches:
+                self._index = matches[-1] if shuffle else matches[0]
         else:
-            self._index = (self._index + 1) % len(self._tracks)
+            self._index = (self._index + (2 if shuffle else 1)) % len(self._tracks)
         self._progress_ms = 0
         self._is_playing = True
         self._last_tick = time.monotonic()
-        return ActionResult(True, f"Playing {item.title}")
+        verb = "Shuffling" if shuffle else "Playing"
+        return ActionResult(True, f"{verb} {item.title}")
 
     def transfer_playback(self, device_id: str, force_play: bool = True) -> ActionResult:
         for d in self._devices:

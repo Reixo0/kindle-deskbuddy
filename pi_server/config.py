@@ -33,6 +33,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str) -> float | None:
+    val = os.getenv(name)
+    if val is None or not val.strip():
+        return None
+    try:
+        return float(val.strip())
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class Settings:
     spotify_client_id: str
@@ -50,6 +60,10 @@ class Settings:
     time_format: str
     font_path: str
     font_bold_path: str
+    weather_city: str = ""
+    weather_lat: float | None = None
+    weather_lon: float | None = None
+    weather_units: str = "C"
 
     @property
     def has_spotify_credentials(self) -> bool:
@@ -71,6 +85,10 @@ def load_settings() -> Settings:
     if time_fmt not in ("24h", "12h"):
         time_fmt = "24h"
 
+    w_units = os.getenv("WEATHER_UNITS", "C").strip().upper()
+    if w_units not in ("C", "F"):
+        w_units = "C"
+
     return Settings(
         spotify_client_id=client_id,
         spotify_client_secret=client_secret,
@@ -89,4 +107,8 @@ def load_settings() -> Settings:
         time_format=time_fmt,
         font_path=os.getenv("FONT_PATH", "").strip(),
         font_bold_path=os.getenv("FONT_BOLD_PATH", "").strip(),
+        weather_city=os.getenv("WEATHER_CITY", "").strip(),
+        weather_lat=_env_float("WEATHER_LAT"),
+        weather_lon=_env_float("WEATHER_LON"),
+        weather_units=w_units,
     )

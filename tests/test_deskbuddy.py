@@ -152,6 +152,44 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(self.state.view, ViewMode.ALBUM_DETAIL)
         self.assertTrue(len(self.state.selected_album_tracks) > 0)
 
+    def test_shuffle_play_recent_idle_cycle_device_and_weather(self) -> None:
+        from pi_server.spotify_client import PlaybackState
+        from pi_server.weather import wmo_code_to_condition
+
+        # 1. Idle items return up to 4 recently played playlists/albums
+        recent_pl = self.state.get_idle_items(BrowseTab.PLAYLISTS)
+        recent_alb = self.state.get_idle_items(BrowseTab.ALBUMS)
+        self.assertEqual(len(recent_pl), 4)
+        self.assertEqual(len(recent_alb), 4)
+
+        # 2. Shuffle-play starts playback with shuffle ON
+        res = self.state._execute_action("play_item", {"item": recent_pl[0], "shuffle": True})
+        self.assertTrue(res["ok"])
+        self.assertTrue(self.state.playback.shuffle_state)
+
+        # 3. 1-tap cycle_device switches to next device
+        prev_dev = self.state.playback.device_id
+        res = self.state._execute_action("cycle_device", {})
+        self.assertTrue(res["ok"])
+        self.assertNotEqual(self.state.playback.device_id, prev_dev)
+
+        # 4. Losing all Spotify devices jumps straight to IDLE_CLOCK immediately
+        self.state.view = ViewMode.NOW_PLAYING
+        orig_get_pb = self.spotify.get_playback
+        self.spotify.get_playback = lambda: PlaybackState(authenticated=True, is_playing=False, device_id="")
+        try:
+            self.state.refresh_playback()
+            self.assertEqual(self.state.view, ViewMode.IDLE_CLOCK)
+        finally:
+            self.spotify.get_playback = orig_get_pb
+
+        # 5. Weather WMO mapping & demo weather
+        self.assertEqual(wmo_code_to_condition(0), ("clear", "Sunny"))
+        self.assertEqual(wmo_code_to_condition(61), ("rain", "Rainy"))
+        w = self.state.weather.get_weather()
+        self.assertIsNotNone(w)
+        self.assertLessEqual(w.temp_min, w.temp_max)
+
 
 class TestRendererOptional(unittest.TestCase):
     def test_render_all_views_if_pillow_installed(self) -> None:

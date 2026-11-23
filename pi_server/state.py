@@ -11,6 +11,7 @@ from typing import Any, Optional
 from .config import Settings
 from .lyrics import LyricsService
 from .spotify_client import DeviceItem, MediaItem, PlaybackState, SpotifyBackend
+from .weather import WeatherService
 
 
 class ViewMode(str, Enum):
@@ -68,6 +69,7 @@ class DeskBuddyState:
         self.settings = settings
         self.spotify = spotify
         self.lyrics = LyricsService(demo_mode=spotify.is_demo)
+        self.weather = WeatherService(settings, demo_mode=spotify.is_demo)
         self._lock = threading.RLock()
 
         now = time.monotonic()
@@ -166,7 +168,15 @@ class DeskBuddyState:
             else:
                 idle_elapsed = now - self.last_playing_at
                 interaction_elapsed = now - self.last_interaction_at
-                if idle_elapsed >= self.settings.idle_timeout_seconds:
+                # If Spotify lost all active devices, jump straight to the Standby Clock
+                lost_all_devices = (
+                    pb.authenticated
+                    and not pb.device_id
+                    and not pb.error_message
+                )
+                if lost_all_devices and self.view == ViewMode.NOW_PLAYING:
+                    self._set_view(ViewMode.IDLE_CLOCK)
+                elif idle_elapsed >= self.settings.idle_timeout_seconds:
                     if self.view == ViewMode.NOW_PLAYING:
                         self._set_view(ViewMode.IDLE_CLOCK)
                     elif (
@@ -194,6 +204,15 @@ class DeskBuddyState:
         if active_tab == BrowseTab.PLAYLISTS:
             return self._cached_fetch("playlists", 60.0, self.spotify.get_playlists)
         return self._cached_fetch("recent", 30.0, self.spotify.get_recently_played)
+
+    def get_idle_items(self, tab: Optional[BrowseTab] = None) -> list[MediaItem]:
+        """Return the 4 most recently played playlists/albums (or liked songs) for the Standby Clock."""
+        active_tab = tab or self.idle_tab
+        if active_tab == BrowseTab.PLAYLISTS:
+            return self._cached_fetch("recent_playlists", 45.0, self.spotify.get_recent_playlists)
+        if active_tab == BrowseTab.ALBUMS:
+            return self._cached_fetch("recent_albums", 45.0, self.spotify.get_recent_albums)
+        return self.get_browse_items(active_tab)[:4]
 
     def get_queue_data(self) -> tuple[Optional[MediaItem], list[MediaItem]]:
         return self._cached_fetch("queue", 10.0, self.spotify.get_queue)
@@ -388,14 +407,30 @@ class DeskBuddyState:
 
         if action == "play_item":
             item = payload["item"]
-            res = self.spotify.play_item(item)
+            shuffle_flag = payload.get("shuffle")
+            res = self.spotify.play_item(item, shuffle=shuffle_flag)
             self.set_banner(res.message, ttl=3.0)
             if res.ok:
-                self.invalidate_cache("queue")
+                self.invalidate_cache("queue", "recent_albums", "recent_playlists")
                 self.last_playing_at = time.monotonic()
                 self._set_view(ViewMode.NOW_PLAYING)
                 self.refresh_playback()
             return {"ok": res.ok, "message": res.message}
+
+        if action == "cycle_device":
+            self.invalidate_cache("devices")
+            devices = self.get_devices_data()
+            if not devices:
+                self.set_banner("No Spotify devices found", ttl=3.0)
+                return {"ok": False, "message": "No Spotify devices found"}
+            active_idx = next((i for i, d in enumerate(devices) if d.is_active), -1)
+            next_dev = devices[(active_idx + 1) % len(devices)]
+            res = self.spotify.transfer_playback(next_dev.id, force_play=self.playback.is_playing)
+            self.invalidate_cache("devices")
+            msg = f"Device: {next_dev.name}" if res.ok else res.message
+            self.set_banner(msg, ttl=3.0)
+            self.refresh_playback()
+            return {"ok": res.ok, "message": msg}
 
         if action == "select_device":
             device_id = payload["device_id"]
