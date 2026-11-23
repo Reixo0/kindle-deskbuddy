@@ -38,6 +38,33 @@ _BOLD_FONT_CANDIDATES = [
     "/usr/share/fonts/noto/NotoSans-Bold.ttf",
 ]
 
+_CJK_REGULAR_CANDIDATES = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansJP-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansJP-Regular.ttf",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+    "/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+]
+
+_CJK_BOLD_CANDIDATES = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansJP-Bold.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansJP-Bold.ttf",
+]
+
+
+def _has_cjk(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if code >= 0x2E80:
+            return True
+    return False
+
 
 def _find_font_file(preferred: str, candidates: list[str]) -> Optional[str]:
     if preferred and Path(preferred).is_file():
@@ -49,21 +76,36 @@ def _find_font_file(preferred: str, candidates: list[str]) -> Optional[str]:
 
 
 class _FontKit:
-    def __init__(self, regular_path: Optional[str], bold_path: Optional[str]) -> None:
+    def __init__(
+        self,
+        regular_path: Optional[str],
+        bold_path: Optional[str],
+        cjk_regular_path: Optional[str] = None,
+        cjk_bold_path: Optional[str] = None,
+    ) -> None:
         self._regular = regular_path
         self._bold = bold_path or regular_path
-        self._cache: dict[tuple[bool, int], ImageFont.ImageFont] = {}
+        self._cjk_regular = cjk_regular_path
+        self._cjk_bold = cjk_bold_path or cjk_regular_path
+        self._cache: dict[tuple[bool, bool, int], ImageFont.ImageFont] = {}
 
-    def get(self, size: int, bold: bool = False) -> ImageFont.ImageFont:
+    def get(self, size: int, bold: bool = False, cjk: bool = False) -> ImageFont.ImageFont:
         size = max(10, int(size))
-        key = (bold, size)
+        use_cjk = cjk and bool(self._cjk_regular)
+        key = (bold, use_cjk, size)
         if key not in self._cache:
-            path = self._bold if bold else self._regular
+            if use_cjk:
+                path = self._cjk_bold if bold else self._cjk_regular
+            else:
+                path = self._bold if bold else self._regular
             if path:
                 self._cache[key] = ImageFont.truetype(path, size)
             else:
                 self._cache[key] = ImageFont.load_default()
         return self._cache[key]
+
+    def for_text(self, text: str, size: int, bold: bool = False) -> ImageFont.ImageFont:
+        return self.get(size, bold=bold, cjk=_has_cjk(text))
 
 
 def _format_ms(ms: int) -> str:
@@ -164,7 +206,9 @@ class DeskBuddyRenderer:
         self.settings = settings
         reg = _find_font_file(settings.font_path, _REGULAR_FONT_CANDIDATES)
         bold = _find_font_file(settings.font_bold_path, _BOLD_FONT_CANDIDATES)
-        self.fonts = _FontKit(reg, bold)
+        cjk_reg = _find_font_file("", _CJK_REGULAR_CANDIDATES)
+        cjk_bold = _find_font_file("", _CJK_BOLD_CANDIDATES)
+        self.fonts = _FontKit(reg, bold, cjk_reg, cjk_bold)
 
     def render(
         self,
@@ -204,6 +248,8 @@ class DeskBuddyRenderer:
                 self._render_queue(draw, state, logical_w, logical_h, top_h, s, add_box)
             elif state.view == ViewMode.DEVICES:
                 self._render_devices(draw, state, logical_w, logical_h, top_h, s, add_box)
+            elif state.view == ViewMode.BRIGHTNESS:
+                self._render_brightness(draw, state, logical_w, logical_h, top_h, s, add_box)
 
         # Transient toast / error banner at bottom-center if present
         banner = state.active_banner() or state.playback.error_message
@@ -367,6 +413,18 @@ class DeskBuddyRenderer:
         draw.polygon([(x2 + 2, y1), (x2 - ah, y1 - ah), (x2 - ah, y1 + ah)], fill=color)
         draw.polygon([(x2 + 2, y2), (x2 - ah, y2 - ah), (x2 - ah, y2 + ah)], fill=color)
 
+    def _draw_sun_icon(self, draw: ImageDraw.ImageDraw, cx: int, cy: int, r: int, color: int) -> None:
+        inner_r = max(3, int(r * 0.48))
+        draw.ellipse([cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r], fill=color)
+        w = max(2, int(r * 0.16))
+        for deg in range(0, 360, 45):
+            rad = math.radians(deg)
+            x1 = cx + int(math.cos(rad) * (inner_r + max(2, int(r * 0.2))))
+            y1 = cy + int(math.sin(rad) * (inner_r + max(2, int(r * 0.2))))
+            x2 = cx + int(math.cos(rad) * r)
+            y2 = cy + int(math.sin(rad) * r)
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=w)
+
     def _render_top_bar(
         self,
         draw: ImageDraw.ImageDraw,
@@ -401,7 +459,7 @@ class DeskBuddyRenderer:
             add_box(*box, "nav", view=mode.value)
             cur_x += bw + s(10)
 
-        # Right side: Exit button + Battery + Clock
+        # Right side: Exit button + Battery + Brightness button (+ compact clock on non-NowPlaying views)
         cy = top_h // 2
         exit_w = s(38)
         exit_box = (w - s(12) - exit_w, btn_y1, w - s(12), btn_y2)
@@ -411,10 +469,33 @@ class DeskBuddyRenderer:
         left_of_batt = self._draw_battery(
             draw, exit_box[0] - s(12), cy, state.kindle_battery, state.kindle_charging, s
         )
-        clock_str = _format_clock(self.settings.time_format)
-        clock_font = self.fonts.get(s(22), bold=True)
-        cw = int(draw.textlength(clock_str, font=clock_font))
-        draw.text((left_of_batt - s(12) - cw, cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+
+        # Brightness button with crisp sun icon
+        bright_active = state.view == ViewMode.BRIGHTNESS
+        bright_w = s(44)
+        bright_box = (left_of_batt - s(8) - bright_w, btn_y1, left_of_batt - s(8), btn_y2)
+        draw.rounded_rectangle(
+            bright_box,
+            radius=s(7),
+            fill=BLACK if bright_active else WHITE,
+            outline=BLACK,
+            width=max(1, s(2)),
+        )
+        self._draw_sun_icon(
+            draw,
+            (bright_box[0] + bright_box[2]) // 2,
+            cy,
+            s(11),
+            WHITE if bright_active else BLACK,
+        )
+        add_box(*bright_box, "toggle_brightness")
+
+        # Show compact clock in top bar on Library/Queue/Devices/Brightness (Now Playing has the big clock)
+        if state.view != ViewMode.NOW_PLAYING:
+            clock_str = _format_clock(self.settings.time_format)
+            clock_font = self.fonts.get(s(21), bold=True)
+            cw = int(draw.textlength(clock_str, font=clock_font))
+            draw.text((bright_box[0] - s(14) - cw, cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
 
     def _render_banner(
         self,
@@ -450,13 +531,33 @@ class DeskBuddyRenderer:
         add_box,
     ) -> None:
         pb: PlaybackState = state.playback
-        content_top = top_h + s(18)
-        content_h = h - content_top - s(18)
+        margin_x = s(20)
+        content_top = top_h + s(12)
+        content_bottom = h - s(16)
 
-        # Left column: Large square Album Art (centerpiece)
-        art_size = min(s(440), content_h, int(w * 0.55))
-        art_x = s(22)
-        art_y = content_top + (content_h - art_size) // 2
+        # Left column: Big Clock + Date on top, Large square Album Art below
+        clock_band_h = s(68)
+        avail_art_h = content_bottom - (content_top + clock_band_h + s(10))
+        art_size = min(s(440), avail_art_h, int(w * 0.54))
+        art_x = margin_x
+        art_y = content_top + clock_band_h + s(10)
+
+        # Prominent Clock + Date aligned cleanly with album art width
+        clock_str = _format_clock(self.settings.time_format)
+        clock_font_size = s(58) if self.settings.time_format == "24h" else s(44)
+        clock_font = self.fonts.get(clock_font_size, bold=True)
+        clock_cy = content_top + clock_band_h // 2
+        draw.text((art_x, clock_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+
+        date_str = _format_date()
+        date_font = self.fonts.get(s(20), bold=True)
+        dw = int(draw.textlength(date_str, font=date_font))
+        draw.text((art_x + art_size - dw, clock_cy + s(6)), date_str, font=date_font, fill=DARK_GRAY, anchor="lm")
+        draw.line(
+            [(art_x, art_y - s(6)), (art_x + art_size, art_y - s(6))],
+            fill=MID_GRAY,
+            width=max(1, s(1)),
+        )
 
         art_img = None
         if pb.album_art_url:
@@ -485,94 +586,94 @@ class DeskBuddyRenderer:
         # Tapping the album art toggles play/pause for effortless desk use
         add_box(art_x, art_y, art_x + art_size, art_y + art_size, "play_pause")
 
-        # Right column: Track metadata + complete controls
+        # Right column: Track metadata + complete controls filling full height cleanly
         rx = art_x + art_size + s(24)
-        rw = w - rx - s(20)
-        y = art_y
+        rw = w - rx - margin_x
+        y = content_top + s(4)
 
-        # Track title (up to 2 lines)
-        title_font = self.fonts.get(s(26), bold=True)
+        # Track title (up to 2 lines, CJK-aware)
         title_text = pb.track_name or ("Nothing Playing" if pb.authenticated else "Spotify Not Linked")
+        title_font = self.fonts.for_text(title_text, s(26), bold=True)
         title_lines = _wrap_text(draw, title_text, title_font, rw, max_lines=2)
         for line in title_lines:
             draw.text((rx, y), line, font=title_font, fill=BLACK)
-            y += s(32)
+            y += s(34)
 
-        # Artist & Album
-        artist_font = self.fonts.get(s(19), bold=False)
-        artist_str = _truncate_text(
-            draw,
-            pb.artist_name or ("Tap Library to pick music" if pb.authenticated else "Open /auth/login on Pi"),
-            artist_font,
-            rw,
-        )
-        y += s(4)
+        # Artist & Album (CJK-aware)
+        artist_raw = pb.artist_name or ("Tap Library to pick music" if pb.authenticated else "Open /auth/login on Pi")
+        artist_font = self.fonts.for_text(artist_raw, s(20), bold=False)
+        artist_str = _truncate_text(draw, artist_raw, artist_font, rw)
+        y += s(6)
         draw.text((rx, y), artist_str, font=artist_font, fill=BLACK)
-        y += s(26)
+        y += s(28)
 
         if pb.album_name:
-            album_font = self.fonts.get(s(15), bold=False)
+            album_font = self.fonts.for_text(pb.album_name, s(16), bold=False)
             draw.text((rx, y), _truncate_text(draw, pb.album_name, album_font, rw), font=album_font, fill=DARK_GRAY)
-        y += s(24)
+        y += s(28)
 
         # Active device pill (tappable shortcut to Devices view)
         dev_label = f"On: {pb.device_name}" if pb.device_name else "Select Device..."
-        dev_font = self.fonts.get(s(14), bold=True)
+        dev_font = self.fonts.for_text(dev_label, s(15), bold=True)
         dev_text = _truncate_text(draw, dev_label, dev_font, rw - s(16))
-        dev_box = (rx, y, rx + rw, y + s(28))
-        draw.rounded_rectangle(dev_box, radius=s(6), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
+        dev_box = (rx, y, rx + rw, y + s(32))
+        draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
         draw.text(((dev_box[0] + dev_box[2]) // 2, (dev_box[1] + dev_box[3]) // 2), dev_text, font=dev_font, fill=BLACK, anchor="mm")
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
-        y += s(42)
+
+        # Anchor controls cleanly to the bottom of the right column so there's zero wasted gap
+        vol_h = s(52)
+        tog_h = s(54)
+        btn_h = s(74)
+        gap = s(14)
+
+        vol_y = art_y + art_size - vol_h
+        tog_y = vol_y - gap - tog_h
+        trans_y = tog_y - gap - btn_h
+        prog_y = trans_y - s(46)
 
         # Progress bar
-        bar_h = s(10)
-        draw.rounded_rectangle([rx, y, rx + rw, y + bar_h], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        bar_h = s(12)
+        draw.rounded_rectangle([rx, prog_y, rx + rw, prog_y + bar_h], radius=s(5), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         if pb.duration_ms > 0:
             ratio = max(0.0, min(1.0, pb.progress_ms / pb.duration_ms))
             fill_w = int(rw * ratio)
             if fill_w > s(4):
-                draw.rounded_rectangle([rx, y, rx + fill_w, y + bar_h], radius=s(4), fill=BLACK)
-        time_font = self.fonts.get(s(13), bold=False)
-        draw.text((rx, y + bar_h + s(5)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
+                draw.rounded_rectangle([rx, prog_y, rx + fill_w, prog_y + bar_h], radius=s(5), fill=BLACK)
+        time_font = self.fonts.get(s(14), bold=False)
+        draw.text((rx, prog_y + bar_h + s(6)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
         dur_str = _format_ms(pb.duration_ms)
-        draw.text((rx + rw - int(draw.textlength(dur_str, font=time_font)), y + bar_h + s(5)), dur_str, font=time_font, fill=DARK_GRAY)
-        y += s(36)
+        draw.text((rx + rw - int(draw.textlength(dur_str, font=time_font)), prog_y + bar_h + s(6)), dur_str, font=time_font, fill=DARK_GRAY)
 
         # Transport Controls: [ Prev ] [ Play / Pause ] [ Next ]
-        btn_h = s(68)
-        gap = s(12)
         side_w = (rw - 2 * gap) // 3
         center_w = rw - 2 * side_w - 2 * gap
 
-        prev_box = (rx, y, rx + side_w, y + btn_h)
-        play_box = (rx + side_w + gap, y, rx + side_w + gap + center_w, y + btn_h)
-        next_box = (rx + side_w + gap + center_w + gap, y, rx + rw, y + btn_h)
+        prev_box = (rx, trans_y, rx + side_w, trans_y + btn_h)
+        play_box = (rx + side_w + gap, trans_y, rx + side_w + gap + center_w, trans_y + btn_h)
+        next_box = (rx + side_w + gap + center_w + gap, trans_y, rx + rw, trans_y + btn_h)
 
         draw.rounded_rectangle(prev_box, radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
-        self._draw_prev_icon(draw, (prev_box[0] + prev_box[2]) // 2, (prev_box[1] + prev_box[3]) // 2, s(14), BLACK)
+        self._draw_prev_icon(draw, (prev_box[0] + prev_box[2]) // 2, (prev_box[1] + prev_box[3]) // 2, s(15), BLACK)
         add_box(*prev_box, "prev")
 
         draw.rounded_rectangle(play_box, radius=s(10), fill=BLACK, outline=BLACK, width=max(2, s(2)))
         pcx, pcy = (play_box[0] + play_box[2]) // 2, (play_box[1] + play_box[3]) // 2
         if pb.is_playing:
-            self._draw_pause_icon(draw, pcx, pcy, s(16), WHITE)
+            self._draw_pause_icon(draw, pcx, pcy, s(17), WHITE)
         else:
-            self._draw_play_icon(draw, pcx, pcy, s(16), WHITE)
+            self._draw_play_icon(draw, pcx, pcy, s(17), WHITE)
         add_box(*play_box, "play_pause")
 
         draw.rounded_rectangle(next_box, radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
-        self._draw_next_icon(draw, (next_box[0] + next_box[2]) // 2, (next_box[1] + next_box[3]) // 2, s(14), BLACK)
+        self._draw_next_icon(draw, (next_box[0] + next_box[2]) // 2, (next_box[1] + next_box[3]) // 2, s(15), BLACK)
         add_box(*next_box, "next")
-        y += btn_h + s(14)
 
         # Toggle Controls: [ Like ] [ Shuffle ]
-        tog_h = s(50)
         half_w = (rw - gap) // 2
-        like_box = (rx, y, rx + half_w, y + tog_h)
-        shuf_box = (rx + half_w + gap, y, rx + rw, y + tog_h)
+        like_box = (rx, tog_y, rx + half_w, tog_y + tog_h)
+        shuf_box = (rx + half_w + gap, tog_y, rx + rw, tog_y + tog_h)
 
-        # Like button
         like_fill = BLACK if pb.is_liked else WHITE
         like_fg = WHITE if pb.is_liked else BLACK
         draw.rounded_rectangle(like_box, radius=s(9), fill=like_fill, outline=BLACK, width=max(1, s(2)))
@@ -581,20 +682,17 @@ class DeskBuddyRenderer:
         draw.text((like_box[0] + s(48), (like_box[1] + like_box[3]) // 2), "Liked" if pb.is_liked else "Like", font=tog_font, fill=like_fg, anchor="lm")
         add_box(*like_box, "like")
 
-        # Shuffle button
         shuf_fill = BLACK if pb.shuffle_state else WHITE
         shuf_fg = WHITE if pb.shuffle_state else BLACK
         draw.rounded_rectangle(shuf_box, radius=s(9), fill=shuf_fill, outline=BLACK, width=max(1, s(2)))
         self._draw_shuffle_icon(draw, shuf_box[0] + s(28), (shuf_box[1] + shuf_box[3]) // 2, s(11), color=shuf_fg)
         draw.text((shuf_box[0] + s(48), (shuf_box[1] + shuf_box[3]) // 2), "Shuffle", font=tog_font, fill=shuf_fg, anchor="lm")
         add_box(*shuf_box, "shuffle")
-        y += tog_h + s(14)
 
         # Volume row: [ - ] [ Volume Bar + % ] [ + ]
-        vol_h = s(48)
-        vbtn_w = s(54)
-        vmin_box = (rx, y, rx + vbtn_w, y + vol_h)
-        vplus_box = (rx + rw - vbtn_w, y, rx + rw, y + vol_h)
+        vbtn_w = s(56)
+        vmin_box = (rx, vol_y, rx + vbtn_w, vol_y + vol_h)
+        vplus_box = (rx + rw - vbtn_w, vol_y, rx + rw, vol_y + vol_h)
         vbar_x1 = rx + vbtn_w + s(10)
         vbar_x2 = rx + rw - vbtn_w - s(10)
 
@@ -605,13 +703,12 @@ class DeskBuddyRenderer:
         self._draw_pill_button(draw, vplus_box, "+", vol_font, active=False, radius=s(9))
         add_box(*vplus_box, "vol_up")
 
-        # Volume meter
         vol_pct = pb.volume_percent if pb.volume_percent is not None else 0
         vol_label = f"Vol {pb.volume_percent}%" if pb.volume_percent is not None else "Vol --"
         vl_font = self.fonts.get(s(14), bold=True)
-        draw.text(((vbar_x1 + vbar_x2) // 2, y + s(10)), vol_label, font=vl_font, fill=BLACK, anchor="mm")
-        m_y1 = y + s(24)
-        m_y2 = y + s(38)
+        draw.text(((vbar_x1 + vbar_x2) // 2, vol_y + s(11)), vol_label, font=vl_font, fill=BLACK, anchor="mm")
+        m_y1 = vol_y + s(26)
+        m_y2 = vol_y + s(41)
         draw.rounded_rectangle([vbar_x1, m_y1, vbar_x2, m_y2], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         if pb.volume_percent is not None and vol_pct > 0:
             fw = int((vbar_x2 - vbar_x1) * vol_pct / 100)
@@ -644,7 +741,13 @@ class DeskBuddyRenderer:
         left_of_batt = self._draw_battery(
             draw, exit_box[0] - s(12), header_y, state.kindle_battery, state.kindle_charging, s
         )
-        dev_box = (left_of_batt - s(108), s(10), left_of_batt - s(14), s(46))
+        bright_w = s(44)
+        bright_box = (left_of_batt - s(8) - bright_w, s(10), left_of_batt - s(8), s(46))
+        draw.rounded_rectangle(bright_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(11), BLACK)
+        add_box(*bright_box, "toggle_brightness")
+
+        dev_box = (bright_box[0] - s(108), s(10), bright_box[0] - s(10), s(46))
         self._draw_pill_button(draw, dev_box, "Devices", dev_btn_font, active=False, radius=s(7))
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
 
@@ -669,9 +772,9 @@ class DeskBuddyRenderer:
         tab_y2 = tab_y1 + s(38)
         tab_font = self.fonts.get(s(16), bold=True)
         idle_tabs = [
+            ("Playlists", BrowseTab.PLAYLISTS),
             ("Albums", BrowseTab.ALBUMS),
             ("Liked Songs", BrowseTab.SONGS),
-            ("Playlists", BrowseTab.PLAYLISTS),
         ]
         cur_x = s(24)
         for label, tab in idle_tabs:
@@ -701,8 +804,6 @@ class DeskBuddyRenderer:
             draw.text((w // 2, (grid_top + grid_bottom) // 2), "No items found in your Spotify library.", font=empty_font, fill=DARK_GRAY, anchor="mm")
             return
 
-        card_title_font = self.fonts.get(s(19), bold=True)
-        card_sub_font = self.fonts.get(s(15), bold=False)
         for idx, item in enumerate(items):
             col = idx % 2
             row = idx // 2
@@ -722,8 +823,10 @@ class DeskBuddyRenderer:
 
             tx = cx1 + s(64)
             tw = card_w - s(78)
-            draw.text((tx, bcy - s(13)), _truncate_text(draw, item.title, card_title_font, tw), font=card_title_font, fill=BLACK, anchor="lm")
-            draw.text((tx, bcy + s(15)), _truncate_text(draw, item.subtitle, card_sub_font, tw), font=card_sub_font, fill=DARK_GRAY, anchor="lm")
+            ct_font = self.fonts.for_text(item.title, s(19), bold=True)
+            cs_font = self.fonts.for_text(item.subtitle, s(15), bold=False)
+            draw.text((tx, bcy - s(13)), _truncate_text(draw, item.title, ct_font, tw), font=ct_font, fill=BLACK, anchor="lm")
+            draw.text((tx, bcy + s(15)), _truncate_text(draw, item.subtitle, cs_font, tw), font=cs_font, fill=DARK_GRAY, anchor="lm")
 
             add_box(cx1, cy1, cx2, cy2, "play_item", item=item)
 
@@ -744,9 +847,9 @@ class DeskBuddyRenderer:
         sub_y2 = sub_y1 + s(38)
         tab_font = self.fonts.get(s(16), bold=True)
         subtabs = [
+            ("Playlists", BrowseTab.PLAYLISTS),
             ("Albums", BrowseTab.ALBUMS),
             ("Liked Songs", BrowseTab.SONGS),
-            ("Playlists", BrowseTab.PLAYLISTS),
             ("Recent", BrowseTab.RECENT),
         ]
         cur_x = s(18)
@@ -779,8 +882,6 @@ class DeskBuddyRenderer:
             empty_font = self.fonts.get(s(20), bold=False)
             draw.text((w // 2, list_top + list_h // 2), "No items available.", font=empty_font, fill=DARK_GRAY, anchor="mm")
         else:
-            title_font = self.fonts.get(s(19), bold=True)
-            sub_font = self.fonts.get(s(15), bold=False)
             btn_font = self.fonts.get(s(15), bold=True)
 
             for i, item in enumerate(page_items):
@@ -790,6 +891,8 @@ class DeskBuddyRenderer:
                 draw.rounded_rectangle([rx1, ry1, rx2, ry2], radius=s(8), fill=WHITE, outline=BLACK, width=max(1, s(2)))
 
                 cy = (ry1 + ry2) // 2
+                title_font = self.fonts.for_text(item.title, s(19), bold=True)
+                sub_font = self.fonts.for_text(item.subtitle, s(15), bold=False)
                 if item.kind == "album":
                     # Right-side Play button + main area opens Album Tracks
                     play_w = s(96)
@@ -838,10 +941,12 @@ class DeskBuddyRenderer:
 
         title_x = back_box[2] + s(16)
         title_w = play_box[0] - title_x - s(14)
-        t_font = self.fonts.get(s(20), bold=True)
-        a_font = self.fonts.get(s(14), bold=False)
-        draw.text((title_x, header_y1 + s(12)), _truncate_text(draw, album.title if album else "Album", t_font, title_w), font=t_font, fill=BLACK, anchor="lm")
-        draw.text((title_x, header_y1 + s(34)), _truncate_text(draw, album.subtitle if album else "", a_font, title_w), font=a_font, fill=DARK_GRAY, anchor="lm")
+        alb_title = album.title if album else "Album"
+        alb_sub = album.subtitle if album else ""
+        t_font = self.fonts.for_text(alb_title, s(20), bold=True)
+        a_font = self.fonts.for_text(alb_sub, s(14), bold=False)
+        draw.text((title_x, header_y1 + s(12)), _truncate_text(draw, alb_title, t_font, title_w), font=t_font, fill=BLACK, anchor="lm")
+        draw.text((title_x, header_y1 + s(34)), _truncate_text(draw, alb_sub, a_font, title_w), font=a_font, fill=DARK_GRAY, anchor="lm")
 
         tracks = state.selected_album_tracks
         per_page = 5
@@ -856,8 +961,6 @@ class DeskBuddyRenderer:
         row_gap = s(10)
         row_h = (list_h - row_gap * (per_page - 1)) // per_page
 
-        row_title_font = self.fonts.get(s(18), bold=True)
-        row_sub_font = self.fonts.get(s(14), bold=False)
         for i, tr in enumerate(page_tracks):
             ry1 = list_top + i * (row_h + row_gap)
             ry2 = ry1 + row_h
@@ -865,6 +968,8 @@ class DeskBuddyRenderer:
             draw.rounded_rectangle([rx1, ry1, rx2, ry2], radius=s(8), fill=WHITE, outline=BLACK, width=max(1, s(2)))
             cy = (ry1 + ry2) // 2
             max_tw = (rx2 - rx1) - s(80)
+            row_title_font = self.fonts.for_text(tr.title, s(18), bold=True)
+            row_sub_font = self.fonts.for_text(tr.subtitle, s(14), bold=False)
             draw.text((rx1 + s(16), cy - s(10)), _truncate_text(draw, tr.title, row_title_font, max_tw), font=row_title_font, fill=BLACK, anchor="lm")
             draw.text((rx1 + s(16), cy + s(12)), _truncate_text(draw, tr.subtitle, row_sub_font, max_tw), font=row_sub_font, fill=DARK_GRAY, anchor="lm")
             self._draw_play_icon(draw, rx2 - s(30), cy, s(10), BLACK)
@@ -894,7 +999,8 @@ class DeskBuddyRenderer:
         np_h = s(56)
         draw.rounded_rectangle([s(18), y, w - s(126), y + np_h], radius=s(8), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(2)))
         np_label = f"Now: {current.title} — {current.subtitle}" if current else "Nothing currently playing"
-        draw.text((s(32), y + np_h // 2), _truncate_text(draw, np_label, head_font, w - s(170)), font=head_font, fill=BLACK, anchor="lm")
+        np_font = self.fonts.for_text(np_label, s(18), bold=True)
+        draw.text((s(32), y + np_h // 2), _truncate_text(draw, np_label, np_font, w - s(170)), font=np_font, fill=BLACK, anchor="lm")
 
         ref_box = (w - s(114), y, w - s(18), y + np_h)
         self._draw_pill_button(draw, ref_box, "Refresh", btn_font, active=False, radius=s(8))
@@ -919,8 +1025,6 @@ class DeskBuddyRenderer:
         if not page_items:
             draw.text((w // 2, y + list_h // 2), "Queue is empty.", font=head_font, fill=DARK_GRAY, anchor="mm")
         else:
-            t_font = self.fonts.get(s(18), bold=True)
-            s_font = self.fonts.get(s(14), bold=False)
             for idx, item in enumerate(page_items):
                 num = page * per_page + idx + 1
                 ry1 = y + idx * (row_h + row_gap)
@@ -929,7 +1033,10 @@ class DeskBuddyRenderer:
                 draw.rounded_rectangle([rx1, ry1, rx2, ry2], radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(1)))
                 cy = (ry1 + ry2) // 2
                 max_tw = (rx2 - rx1) - s(70)
-                draw.text((rx1 + s(16), cy - s(9)), _truncate_text(draw, f"{num}. {item.title}", t_font, max_tw), font=t_font, fill=BLACK, anchor="lm")
+                t_label = f"{num}. {item.title}"
+                t_font = self.fonts.for_text(t_label, s(18), bold=True)
+                s_font = self.fonts.for_text(item.subtitle, s(14), bold=False)
+                draw.text((rx1 + s(16), cy - s(9)), _truncate_text(draw, t_label, t_font, max_tw), font=t_font, fill=BLACK, anchor="lm")
                 draw.text((rx1 + s(38), cy + s(12)), _truncate_text(draw, item.subtitle, s_font, max_tw - s(22)), font=s_font, fill=DARK_GRAY, anchor="lm")
                 self._draw_play_icon(draw, rx2 - s(28), cy, s(9), BLACK)
                 add_box(rx1, ry1, rx2, ry2, "play_item", item=item)
@@ -1017,6 +1124,86 @@ class DeskBuddyRenderer:
             )
             draw.text(((bx1 + rx2 - s(16)) // 2, cy), badge_text, font=badge_font, fill=BLACK, anchor="mm")
             add_box(rx1, ry1, rx2, ry2, "select_device", device_id=dev.id)
+
+    # ------------------------------------------------------------------
+    # 7. BRIGHTNESS VIEW (Kindle frontlight control 0..24)
+    # ------------------------------------------------------------------
+    def _render_brightness(
+        self,
+        draw: ImageDraw.ImageDraw,
+        state: DeskBuddyState,
+        w: int,
+        h: int,
+        top_h: int,
+        s,
+        add_box,
+    ) -> None:
+        level = max(0, min(24, state.kindle_brightness))
+        pct = int(round(level * 100 / 24))
+
+        # Header with Back button
+        hy1 = top_h + s(20)
+        hy2 = hy1 + s(44)
+        btn_font = self.fonts.get(s(17), bold=True)
+        back_box = (s(24), hy1, s(132), hy2)
+        self._draw_pill_button(draw, back_box, "< Back", btn_font, active=False, radius=s(8))
+        add_box(*back_box, "toggle_brightness")
+
+        title_font = self.fonts.get(s(26), bold=True)
+        draw.text((w // 2, (hy1 + hy2) // 2), "Screen Brightness", font=title_font, fill=BLACK, anchor="mm")
+
+        # Big sun icon + level readout
+        cy = top_h + s(140)
+        self._draw_sun_icon(draw, w // 2 - s(90), cy, s(28), BLACK)
+        val_font = self.fonts.get(s(54), bold=True)
+        draw.text((w // 2 + s(30), cy), f"{pct}%", font=val_font, fill=BLACK, anchor="mm")
+        sub_font = self.fonts.get(s(16), bold=False)
+        draw.text((w // 2, cy + s(48)), f"Kindle Frontlight Level: {level} / 24", font=sub_font, fill=DARK_GRAY, anchor="mm")
+
+        # Wide bar + big [-] and [+] controls
+        row_y1 = top_h + s(225)
+        row_y2 = row_y1 + s(76)
+        pm_w = s(96)
+        minus_box = (s(40), row_y1, s(40) + pm_w, row_y2)
+        plus_box = (w - s(40) - pm_w, row_y1, w - s(40), row_y2)
+
+        pm_font = self.fonts.get(s(36), bold=True)
+        self._draw_pill_button(draw, minus_box, "-", pm_font, active=False, radius=s(12))
+        add_box(*minus_box, "brightness_step", delta=-2)
+
+        self._draw_pill_button(draw, plus_box, "+", pm_font, active=False, radius=s(12))
+        add_box(*plus_box, "brightness_step", delta=2)
+
+        bar_x1 = minus_box[2] + s(22)
+        bar_x2 = plus_box[0] - s(22)
+        bar_y1 = row_y1 + s(18)
+        bar_y2 = row_y2 - s(18)
+        draw.rounded_rectangle([bar_x1, bar_y1, bar_x2, bar_y2], radius=s(8), fill=WHITE, outline=BLACK, width=max(2, s(3)))
+        if level > 0:
+            fw = int((bar_x2 - bar_x1) * level / 24)
+            if fw > s(8):
+                draw.rounded_rectangle([bar_x1, bar_y1, bar_x1 + fw, bar_y2], radius=s(8), fill=BLACK)
+
+        # 5 quick presets: Off, Low, Med, High, Max
+        presets = [
+            ("Off", 0),
+            ("Low", 5),
+            ("Med", 12),
+            ("High", 18),
+            ("Max", 24),
+        ]
+        py1 = row_y2 + s(42)
+        py2 = py1 + s(66)
+        pgap = s(14)
+        total_w = w - s(80)
+        pw = (total_w - pgap * (len(presets) - 1)) // len(presets)
+        p_font = self.fonts.get(s(19), bold=True)
+        for i, (label, pval) in enumerate(presets):
+            px1 = s(40) + i * (pw + pgap)
+            px2 = px1 + pw
+            active = abs(level - pval) <= 1
+            self._draw_pill_button(draw, (px1, py1, px2, py2), label, p_font, active=active, radius=s(10))
+            add_box(px1, py1, px2, py2, "brightness_set", level=pval)
 
     def _render_pagination(
         self,

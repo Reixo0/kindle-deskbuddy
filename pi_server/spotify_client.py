@@ -410,9 +410,13 @@ class RealSpotifyService:
             for pl in res.get("items", []):
                 if not pl:
                     continue
-                total = (pl.get("tracks") or {}).get("total", 0)
+                tracks_obj = pl.get("tracks") or pl.get("items") or {}
+                total = tracks_obj.get("total") if isinstance(tracks_obj, dict) else None
                 owner = (pl.get("owner") or {}).get("display_name", "")
-                sub = f"{owner} · {total} tracks" if owner else f"{total} tracks"
+                if total and total > 0:
+                    sub = f"{owner} · {total} tracks" if owner else f"{total} tracks"
+                else:
+                    sub = owner or "Playlist"
                 items.append(
                     MediaItem(
                         id=pl.get("id", ""),

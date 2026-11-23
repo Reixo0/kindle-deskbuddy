@@ -110,10 +110,23 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(self.state.playback.device_id, target.id)
 
     def test_album_drilldown(self) -> None:
+        self.assertEqual(self.state.browse_tab, BrowseTab.PLAYLISTS)
+        self.assertEqual(self.state.idle_tab, BrowseTab.PLAYLISTS)
         albums = self.state.get_browse_items(BrowseTab.ALBUMS)
         self.state._execute_action("open_album", {"item": albums[0]})
         self.assertEqual(self.state.view, ViewMode.ALBUM_DETAIL)
         self.assertTrue(len(self.state.selected_album_tracks) > 0)
+
+    def test_brightness_controls(self) -> None:
+        self.state._execute_action("toggle_brightness", {})
+        self.assertEqual(self.state.view, ViewMode.BRIGHTNESS)
+        res = self.state._execute_action("brightness_set", {"level": 18})
+        self.assertEqual(res["brightness"], 18)
+        self.assertEqual(self.state.kindle_brightness, 18)
+        res = self.state._execute_action("brightness_step", {"delta": -4})
+        self.assertEqual(res["brightness"], 14)
+        self.state._execute_action("toggle_brightness", {})
+        self.assertEqual(self.state.view, ViewMode.NOW_PLAYING)
 
 
 class TestRendererOptional(unittest.TestCase):

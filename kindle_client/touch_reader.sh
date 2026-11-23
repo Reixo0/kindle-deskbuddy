@@ -128,11 +128,12 @@ local ev = ffi.new("struct input_event")
 local ev_size = ffi.sizeof(ev)
 local tx, ty = -1, -1
 local touching = false
+local seen_mt = false
 local last_ms = 0
 
 local function emit(sec, usec, rx, ry)
     local now_ms = tonumber(sec) * 1000 + math.floor(tonumber(usec) / 1000)
-    if (now_ms - last_ms) < 250 then return end
+    if (now_ms - last_ms) < 280 then return end
     last_ms = now_ms
 
     local x, y = rx, ry
@@ -157,20 +158,23 @@ while true do
         local t = ev.type
         local c = ev.code
         local v = ev.value
-        if t == 3 and (c == 53 or c == 0) then
-            tx = v
-            touching = true
-        elseif t == 3 and (c == 54 or c == 1) then
-            ty = v
-            touching = true
+        if t == 3 and c == 53 then
+            seen_mt = true; tx = v; touching = true
+        elseif t == 3 and c == 54 then
+            seen_mt = true; ty = v; touching = true
         elseif t == 3 and c == 57 then
+            seen_mt = true
             if v >= 0 then
                 touching = true
             elseif touching and tx >= 0 and ty >= 0 then
                 emit(ev.tv_sec, ev.tv_usec, tx, ty)
                 touching = false; tx = -1; ty = -1
             end
-        elseif t == 1 and c == 330 then
+        elseif not seen_mt and t == 3 and c == 0 then
+            tx = v; touching = true
+        elseif not seen_mt and t == 3 and c == 1 then
+            ty = v; touching = true
+        elseif not seen_mt and t == 1 and c == 330 then
             if v == 1 then
                 touching = true
             elseif v == 0 and touching and tx >= 0 and ty >= 0 then

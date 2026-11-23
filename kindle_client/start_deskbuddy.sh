@@ -15,4 +15,4 @@ if [ ! -f "$DESKBUDDY_DIR/deskbuddy.sh" ]; then
     exit 1
 fi
 
-sh "$DESKBUDDY_DIR/deskbuddy.sh"
+sh "$DESKBUDDY_DIR/deskbuddy.sh" >/dev/null 2>&1

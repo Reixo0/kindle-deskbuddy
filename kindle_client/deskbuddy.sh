@@ -81,9 +81,9 @@ draw_image() {
     fi
     if [ "$IMAGE_BACKEND" = "eips" ] && [ -n "$EIPS" ]; then
         if [ "$FULL" = "1" ]; then
-            "$EIPS" -f -g "$FILE" 2>>"$LOG_FILE" && return 0
+            "$EIPS" -f -g "$FILE" >/dev/null 2>>"$LOG_FILE" && return 0
         else
-            "$EIPS" -g "$FILE" 2>>"$LOG_FILE" && return 0
+            "$EIPS" -g "$FILE" >/dev/null 2>>"$LOG_FILE" && return 0
         fi
         log "eips -g failed ($?)"
         return 1
@@ -132,24 +132,43 @@ read_battery() {
     CHG="0"
     if command -v gasgauge-info >/dev/null 2>&1; then
         BATT="$(gasgauge-info -s 2>/dev/null | tr -dc '0-9')"
-        CURR="$(gasgauge-info -c 2>/dev/null | tr -dc '0-9-')"
-        if [ -n "$CURR" ] && [ "$CURR" -gt 0 ] 2>/dev/null; then
-            CHG="1"
-        fi
     fi
     if [ -z "$BATT" ]; then
         for p in /sys/class/power_supply/*/capacity; do
             if [ -r "$p" ]; then
                 BATT="$(cat "$p" 2>/dev/null | tr -dc '0-9')"
-                STATUS_FILE="$(dirname "$p")/status"
-                if [ -r "$STATUS_FILE" ] && grep -qi "charging" "$STATUS_FILE" 2>/dev/null; then
-                    CHG="1"
-                fi
+                break
+            fi
+        done
+    fi
+    # Use official Kindle powerd property for accurate charging detection
+    if command -v lipc-get-prop >/dev/null 2>&1; then
+        IS_CHG="$(lipc-get-prop com.lab126.powerd isCharging 2>/dev/null | tr -dc '0-9')"
+        [ "$IS_CHG" = "1" ] && CHG="1"
+    else
+        for s in /sys/class/power_supply/*/status; do
+            if [ -r "$s" ] && grep -qi "^charging$" "$s" 2>/dev/null; then
+                CHG="1"
                 break
             fi
         done
     fi
     BATT="${BATT:-50}"
+}
+
+read_brightness() {
+    BRIGHT=""
+    if command -v lipc-get-prop >/dev/null 2>&1; then
+        BRIGHT="$(lipc-get-prop com.lab126.powerd flIntensity 2>/dev/null | tr -dc '0-9')"
+    fi
+}
+
+set_brightness() {
+    VAL="$1"
+    [ -z "$VAL" ] && return
+    if command -v lipc-set-prop >/dev/null 2>&1; then
+        lipc-set-prop com.lab126.powerd flIntensity "$VAL" >/dev/null 2>&1 || true
+    fi
 }
 
 http_get_screen() {
@@ -189,9 +208,9 @@ cleanup() {
     fi
     rm -f "$PID_FILE" "$DIRTY_FLAG" "$EXIT_FLAG" "$IMG_FILE.tmp"
     if [ -n "$EIPS" ]; then
-        "$EIPS" -c 2>/dev/null || true
+        "$EIPS" -c >/dev/null 2>&1 || true
     elif [ -n "$FBINK" ]; then
-        "$FBINK" -q -c -f 2>/dev/null || true
+        "$FBINK" -q -c -f >/dev/null 2>&1 || true
     fi
     log "Desk Buddy exited cleanly"
 }
@@ -249,6 +268,11 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
             : > "$EXIT_FLAG"
             break
         fi
+        NEW_BRIGHT="$(echo "$RESP" | sed -n 's/.*"brightness": *\([0-9][0-9]*\).*/\1/p')"
+        if [ -n "$NEW_BRIGHT" ]; then
+            log "Setting brightness to $NEW_BRIGHT"
+            set_brightness "$NEW_BRIGHT"
+        fi
         : > "$DIRTY_FLAG"
     done
 ) &
@@ -262,7 +286,10 @@ command -v usleep >/dev/null 2>&1 && HAS_USLEEP="1"
 
 while [ ! -f "$EXIT_FLAG" ]; do
     read_battery
-    SCREEN_URL="${PI_URL}/api/screen.png?w=${FB_W}&h=${FB_H}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}"
+    read_brightness
+    BRIGHT_PARAM=""
+    [ -n "$BRIGHT" ] && BRIGHT_PARAM="&brightness=${BRIGHT}"
+    SCREEN_URL="${PI_URL}/api/screen.png?w=${FB_W}&h=${FB_H}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}${BRIGHT_PARAM}"
 
     if http_get_screen "$SCREEN_URL"; then
         mv -f "$IMG_FILE.tmp" "$IMG_FILE"

@@ -19,6 +19,7 @@ class ViewMode(str, Enum):
     ALBUM_DETAIL = "album_detail"
     QUEUE = "queue"
     DEVICES = "devices"
+    BRIGHTNESS = "brightness"
 
 
 class BrowseTab(str, Enum):
@@ -69,8 +70,9 @@ class DeskBuddyState:
 
         now = time.monotonic()
         self.view: ViewMode = ViewMode.NOW_PLAYING
-        self.browse_tab: BrowseTab = BrowseTab.ALBUMS
-        self.idle_tab: BrowseTab = BrowseTab.ALBUMS
+        self.previous_view: ViewMode = ViewMode.NOW_PLAYING
+        self.browse_tab: BrowseTab = BrowseTab.PLAYLISTS
+        self.idle_tab: BrowseTab = BrowseTab.PLAYLISTS
         self.page: int = 0
 
         self.selected_album: Optional[MediaItem] = None
@@ -85,6 +87,8 @@ class DeskBuddyState:
         self.kindle_battery: Optional[int] = None
         self.kindle_charging: bool = False
         self.last_battery_at: float = 0.0
+        self.kindle_brightness: int = 12  # Kindle frontlight scale 0..24
+        self.brightness_dirty: bool = False
 
         self.status_banner: str = ""
         self.status_banner_until: float = 0.0
@@ -107,13 +111,20 @@ class DeskBuddyState:
             return self.status_banner
         return ""
 
-    def update_battery(self, battery: Optional[int], charging: Optional[bool]) -> None:
+    def update_battery(
+        self,
+        battery: Optional[int],
+        charging: Optional[bool],
+        brightness: Optional[int] = None,
+    ) -> None:
         with self._lock:
             if battery is not None:
                 self.kindle_battery = max(0, min(100, battery))
                 self.last_battery_at = time.monotonic()
             if charging is not None:
                 self.kindle_charging = bool(charging)
+            if brightness is not None and not self.brightness_dirty:
+                self.kindle_brightness = max(0, min(24, brightness))
 
     def _set_view(self, new_view: ViewMode, reset_page: bool = True) -> None:
         if self.view != new_view:
@@ -228,7 +239,7 @@ class DeskBuddyState:
                 }
 
             result = self._execute_action(matched.action, matched.payload)
-            return {
+            res_dict: dict[str, Any] = {
                 "ok": result.get("ok", True),
                 "action": matched.action,
                 "message": result.get("message", ""),
@@ -237,10 +248,38 @@ class DeskBuddyState:
                 "y": y,
                 "view": self.view.value,
             }
+            if "brightness" in result:
+                res_dict["brightness"] = result["brightness"]
+            return res_dict
 
     def _execute_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         if action == "exit":
             return {"ok": True, "exit": True, "message": "Exiting Desk Buddy"}
+
+        if action == "toggle_brightness":
+            if self.view == ViewMode.BRIGHTNESS:
+                self._set_view(self.previous_view)
+            else:
+                self.previous_view = self.view
+                self._set_view(ViewMode.BRIGHTNESS)
+            return {"ok": True, "message": ""}
+
+        if action == "brightness_set":
+            val = max(0, min(24, int(payload.get("level", 12))))
+            self.kindle_brightness = val
+            self.brightness_dirty = False
+            pct = int(round(val * 100 / 24))
+            self.set_banner(f"Brightness {pct}%", ttl=2.0)
+            return {"ok": True, "brightness": val, "message": f"Brightness {pct}%"}
+
+        if action == "brightness_step":
+            delta = int(payload.get("delta", 0))
+            val = max(0, min(24, self.kindle_brightness + delta))
+            self.kindle_brightness = val
+            self.brightness_dirty = False
+            pct = int(round(val * 100 / 24))
+            self.set_banner(f"Brightness {pct}%", ttl=2.0)
+            return {"ok": True, "brightness": val, "message": f"Brightness {pct}%"}
 
         if action == "nav":
             target = ViewMode(payload["view"])

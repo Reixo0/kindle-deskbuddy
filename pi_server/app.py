@@ -60,12 +60,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         rotate: Optional[int] = Query(default=None),
         battery: Optional[int] = Query(default=None, ge=0, le=100),
         charging: Optional[int] = Query(default=None),
+        brightness: Optional[int] = Query(default=None, ge=0, le=24),
         preview: bool = Query(default=False),
     ) -> Response:
-        if battery is not None or charging is not None:
+        if battery is not None or charging is not None or brightness is not None:
             state.update_battery(
                 battery=battery,
                 charging=(bool(charging) if charging is not None else None),
+                brightness=brightness,
             )
         state.refresh_playback()
 
