@@ -222,6 +222,23 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(self.state.sleep_brightness, 3)
         self.assertNotEqual(self.state.view, ViewMode.SLEEP)
 
+    def test_exit_from_sleep_restores_daytime_brightness(self) -> None:
+        self.state.kindle_brightness = 0
+        self.state.sleep_brightness = 6
+        self.state._execute_action("toggle_sleep", {})
+        self.assertEqual(self.state.view, ViewMode.SLEEP)
+
+        # Simulate Kindle reporting wake frontlight (6) during screen polling while in Sleep Mode
+        self.state.update_battery(80, False, brightness=6)
+        self.assertEqual(self.state.saved_brightness, 0)
+
+        res = self.state._execute_action("exit", {})
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["exit"])
+        self.assertEqual(res["brightness"], 0)
+        self.assertEqual(self.state.kindle_brightness, 0)
+        self.assertNotEqual(self.state.view, ViewMode.SLEEP)
+
 
 class TestRendererOptional(unittest.TestCase):
     def test_render_all_views_if_pillow_installed(self) -> None:

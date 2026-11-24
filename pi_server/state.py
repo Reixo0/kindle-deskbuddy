@@ -155,7 +155,12 @@ class DeskBuddyState:
                 self.last_battery_at = time.monotonic()
             if charging is not None:
                 self.kindle_charging = bool(charging)
-            if brightness is not None and not self.brightness_dirty:
+            if (
+                brightness is not None
+                and not self.brightness_dirty
+                and self.view != ViewMode.SLEEP
+                and not self.editing_sleep_brightness
+            ):
                 self.kindle_brightness = max(0, min(24, brightness))
 
     def _set_view(self, new_view: ViewMode, reset_page: bool = True) -> None:
@@ -317,6 +322,18 @@ class DeskBuddyState:
         tap_y: int = 0,
     ) -> dict[str, Any]:
         if action == "exit":
+            if self.view == ViewMode.SLEEP or self.editing_sleep_brightness:
+                restore = self.saved_brightness
+                self.kindle_brightness = restore
+                self._set_view(
+                    ViewMode.NOW_PLAYING if self.playback.is_playing else ViewMode.IDLE_CLOCK
+                )
+                return {
+                    "ok": True,
+                    "exit": True,
+                    "brightness": restore,
+                    "message": "Exiting Desk Buddy",
+                }
             return {"ok": True, "exit": True, "message": "Exiting Desk Buddy"}
 
         if action == "toggle_sleep":

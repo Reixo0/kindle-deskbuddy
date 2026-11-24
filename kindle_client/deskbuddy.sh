@@ -31,6 +31,7 @@ DIRTY_FLAG="$TMP_DIR/dirty"
 EXIT_FLAG="$TMP_DIR/exit"
 SLEEP_FLAG="$TMP_DIR/sleep_mode"
 LIGHT_UNTIL_FILE="$TMP_DIR/light_until"
+SAVED_BRIGHT_FILE="$TMP_DIR/saved_brightness"
 
 # Locate fbink binary (PATH or common jailbreak / KOReader locations)
 FBINK=""
@@ -219,11 +220,14 @@ cleanup() {
     if command -v lipc-set-prop >/dev/null 2>&1; then
         lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null || true
     fi
-    if [ -f "$SLEEP_FLAG" ]; then
-        RESTORE_B="$(cat "$SLEEP_FLAG" 2>/dev/null || echo 8)"
-        set_brightness "${RESTORE_B:-8}"
+    if [ -f "$SAVED_BRIGHT_FILE" ]; then
+        RESTORE_B="$(cat "$SAVED_BRIGHT_FILE" 2>/dev/null || echo 0)"
+        set_brightness "${RESTORE_B:-0}"
+        log "Restored pre-sleep brightness (${RESTORE_B:-0}) on exit"
+    elif [ -f "$SLEEP_FLAG" ]; then
+        set_brightness 0
     fi
-    rm -f "$PID_FILE" "$DIRTY_FLAG" "$EXIT_FLAG" "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE" "$IMG_FILE.tmp"
+    rm -f "$PID_FILE" "$DIRTY_FLAG" "$EXIT_FLAG" "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE" "$SAVED_BRIGHT_FILE" "$IMG_FILE.tmp"
     if [ -n "$EIPS" ]; then
         "$EIPS" -c >/dev/null 2>&1 || true
     elif [ -n "$FBINK" ]; then
@@ -248,7 +252,7 @@ if [ "$PAUSE_KINDLE_UI" = "1" ]; then
 fi
 
 log "Detected FB=${FB_W}x${FB_H} FBINK=${FBINK:-none} EIPS=${EIPS:-none}"
-rm -f "$DIRTY_FLAG" "$EXIT_FLAG" "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE"
+rm -f "$DIRTY_FLAG" "$EXIT_FLAG" "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE" "$SAVED_BRIGHT_FILE"
 
 # Background touch listener: forwards taps to Pi and sets DIRTY_FLAG for immediate redraw
 export TOUCH_MAX_X="${TOUCH_MAX_X:-0}"
@@ -317,14 +321,19 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
             break
         fi
         if echo "$RESP" | grep -q '"sleep_mode": *true'; then
+            read_brightness
+            echo "${BRIGHT:-0}" > "$SAVED_BRIGHT_FILE"
             WAKE_LVL="$(echo "$RESP" | sed -n 's/.*"sleep_wake_brightness": *\([0-9][0-9]*\).*/\1/p')"
             echo "${WAKE_LVL:-6}" > "$SLEEP_FLAG"
             echo "0" > "$LIGHT_UNTIL_FILE"
             set_brightness 0
-            log "Entered sleep mode (frontlight off, wake level=${WAKE_LVL:-6})"
+            log "Entered sleep mode (frontlight off, saved=${BRIGHT:-0}, wake=${WAKE_LVL:-6})"
         elif echo "$RESP" | grep -q '"sleep_mode": *false'; then
-            rm -f "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE"
             NEW_BRIGHT="$(echo "$RESP" | sed -n 's/.*"brightness": *\([0-9][0-9]*\).*/\1/p')"
+            if [ -z "$NEW_BRIGHT" ] && [ -f "$SAVED_BRIGHT_FILE" ]; then
+                NEW_BRIGHT="$(cat "$SAVED_BRIGHT_FILE" 2>/dev/null || true)"
+            fi
+            rm -f "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE" "$SAVED_BRIGHT_FILE"
             [ -n "$NEW_BRIGHT" ] && set_brightness "$NEW_BRIGHT"
             log "Exited sleep mode (restored brightness=${NEW_BRIGHT:-unchanged})"
         else
