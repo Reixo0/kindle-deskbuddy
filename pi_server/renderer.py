@@ -237,7 +237,7 @@ class DeskBuddyRenderer:
         if state.view == ViewMode.IDLE_CLOCK:
             self._render_idle_clock(img, draw, state, logical_w, logical_h, s, add_box)
         elif state.view == ViewMode.SLEEP:
-            self._render_sleep(draw, state, logical_w, logical_h, s, add_box)
+            self._render_sleep(img, draw, state, logical_w, logical_h, s, add_box)
         else:
             top_h = s(54)
             self._render_top_bar(draw, state, logical_w, top_h, s, add_box)
@@ -1459,7 +1459,9 @@ class DeskBuddyRenderer:
         s,
         add_box,
     ) -> None:
-        level = max(0, min(24, state.kindle_brightness))
+        is_sleep_br = state.editing_sleep_brightness
+        raw_level = state.sleep_brightness if is_sleep_br else state.kindle_brightness
+        level = max(0, min(24, raw_level))
         pct = int(round(level * 100 / 24))
 
         # Header with Back button
@@ -1471,7 +1473,8 @@ class DeskBuddyRenderer:
         add_box(*back_box, "toggle_brightness")
 
         title_font = self.fonts.get(s(26), bold=True)
-        draw.text((w // 2, (hy1 + hy2) // 2), "Screen Brightness", font=title_font, fill=BLACK, anchor="mm")
+        heading = "Sleep Wake Brightness" if is_sleep_br else "Screen Brightness"
+        draw.text((w // 2, (hy1 + hy2) // 2), heading, font=title_font, fill=BLACK, anchor="mm")
 
         # Big sun icon + level readout
         cy = top_h + s(140)
@@ -1479,7 +1482,12 @@ class DeskBuddyRenderer:
         val_font = self.fonts.get(s(54), bold=True)
         draw.text((w // 2 + s(30), cy), f"{pct}%", font=val_font, fill=BLACK, anchor="mm")
         sub_font = self.fonts.get(s(16), bold=False)
-        draw.text((w // 2, cy + s(48)), f"Kindle Frontlight Level: {level} / 24", font=sub_font, fill=DARK_GRAY, anchor="mm")
+        sub_txt = (
+            f"Saved Sleep Frontlight: {level} / 24 (independent of normal UI)"
+            if is_sleep_br
+            else f"Kindle Frontlight Level: {level} / 24"
+        )
+        draw.text((w // 2, cy + s(48)), sub_txt, font=sub_font, fill=DARK_GRAY, anchor="mm")
 
         # Wide bar + big [-] and [+] controls
         row_y1 = top_h + s(225)
@@ -1591,10 +1599,11 @@ class DeskBuddyRenderer:
             draw.text((w // 2, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="mm")
 
     # ------------------------------------------------------------------
-    # 8. BEDSIDE SLEEP MODE (Giant Clock + Weather + Minimized Song Controls)
+    # 8. BEDSIDE SLEEP MODE (Giant Clock + Weather + Album Art & Compact Controls)
     # ------------------------------------------------------------------
     def _render_sleep(
         self,
+        img: Image.Image,
         draw: ImageDraw.ImageDraw,
         state: DeskBuddyState,
         w: int,
@@ -1607,7 +1616,7 @@ class DeskBuddyRenderer:
         date_font = self.fonts.get(s(20), bold=True)
         draw.text((s(24), header_y), _format_date(), font=date_font, fill=BLACK, anchor="lm")
 
-        # Right header: [ ☾ Wake ] + Battery + [ X ]
+        # Right header: [ ☾ Sleep ] + [ ☀ ] + Battery + [ X ]
         btn_font = self.fonts.get(s(15), bold=True)
         exit_box = (w - s(18) - s(38), s(10), w - s(18), s(46))
         self._draw_pill_button(draw, exit_box, "X", btn_font, active=False, radius=s(7))
@@ -1617,141 +1626,169 @@ class DeskBuddyRenderer:
             draw, exit_box[0] - s(12), header_y, state.kindle_battery, state.kindle_charging, s
         )
 
+        # Independent Sleep Brightness button (sun icon)
+        bright_w = s(40)
+        bright_box = (left_of_batt - s(8) - bright_w, s(10), left_of_batt - s(8), s(46))
+        draw.rounded_rectangle(bright_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(10), BLACK)
+        add_box(*bright_box, "toggle_brightness")
+
         # Active Sleep Mode pill (inverted black with crescent moon) — tap to exit Sleep Mode
-        sleep_w = s(106)
-        sleep_box = (left_of_batt - s(10) - sleep_w, s(10), left_of_batt - s(10), s(46))
+        sleep_w = s(100)
+        sleep_box = (bright_box[0] - s(8) - sleep_w, s(10), bright_box[0] - s(8), s(46))
         draw.rounded_rectangle(sleep_box, radius=s(7), fill=BLACK, outline=BLACK, width=max(1, s(2)))
-        self._draw_moon_icon(draw, sleep_box[0] + s(22), header_y, s(9), WHITE, BLACK)
-        draw.text((sleep_box[0] + s(40), header_y), "Sleep", font=btn_font, fill=WHITE, anchor="lm")
+        self._draw_moon_icon(draw, sleep_box[0] + s(20), header_y, s(9), WHITE, BLACK)
+        draw.text((sleep_box[0] + s(37), header_y), "Sleep", font=btn_font, fill=WHITE, anchor="lm")
         add_box(*sleep_box, "toggle_sleep")
 
         # Giant Clock + Weather hero (same as Standby Clock)
-        self._draw_clock_weather_hero(draw, state, w, s(156), s)
+        self._draw_clock_weather_hero(draw, state, w, s(154), s)
 
-        # Clean divider separating clock from minimized song controls
-        div_y = s(266)
+        # Clean divider separating clock from album art + compact song controls
+        div_y = s(262)
         draw.line([(s(24), div_y), (w - s(24), div_y)], fill=BLACK, width=max(1, s(2)))
 
-        # Minimized Song Controls UI (no lyrics, no album art — big sleepy-friendly targets)
-        pad_x = s(28)
-        inner_w = w - pad_x * 2
-        y = div_y + s(18)
+        # Bottom area: Square Album Art on left, squished Song Controls on right
+        pad_x = s(24)
+        area_top = div_y + s(16)
+        area_bottom = h - s(18)
+        art_size = min(s(300), area_bottom - area_top)
+        art_x = pad_x
+        art_y = area_top + ((area_bottom - area_top) - art_size) // 2
 
-        # Row 0: Track title + artist on left; Device pill + Switch on right
-        sw_w = s(70)
-        dev_w = s(170)
-        right_block_w = dev_w + s(8) + sw_w
-        meta_w = inner_w - right_block_w - s(16)
+        art_img = None
+        if pb.album_art_url:
+            raw = state.spotify.get_album_art_bytes(pb.album_art_url)
+            if raw:
+                art_img = _dither_eink_art(raw, art_size)
 
+        if art_img is not None:
+            img.paste(art_img, (art_x, art_y))
+        else:
+            draw.rectangle([art_x, art_y, art_x + art_size, art_y + art_size], fill=LIGHT_GRAY)
+            ph_font = self.fonts.get(s(18), bold=True)
+            draw.text((art_x + art_size // 2, art_y + art_size // 2), "No Track", font=ph_font, fill=DARK_GRAY, anchor="mm")
+        draw.rectangle([art_x, art_y, art_x + art_size, art_y + art_size], outline=BLACK, width=max(2, s(2)))
+        add_box(art_x, art_y, art_x + art_size, art_y + art_size, "play_pause")
+
+        # Right side: squished Song Controls aligned vertically with Album Art
+        rx = art_x + art_size + s(20)
+        rw = (w - pad_x) - rx
+        y = art_y
+
+        # Row 0: Track title + artist + compact device/switch row
         title_text = pb.track_name or "Nothing Playing"
         artist_text = pb.artist_name or "Tap Play or Switch to resume"
-        t_font = self.fonts.for_text(title_text, s(24), bold=True)
-        a_font = self.fonts.for_text(artist_text, s(17), bold=False)
-        draw.text((pad_x, y + s(13)), _truncate_text(draw, title_text, t_font, meta_w), font=t_font, fill=BLACK, anchor="lm")
-        draw.text((pad_x, y + s(40)), _truncate_text(draw, artist_text, a_font, meta_w), font=a_font, fill=DARK_GRAY, anchor="lm")
+        t_font = self.fonts.for_text(title_text, s(22), bold=True)
+        a_font = self.fonts.for_text(artist_text, s(16), bold=False)
+        draw.text((rx, y + s(12)), _truncate_text(draw, title_text, t_font, rw), font=t_font, fill=BLACK, anchor="lm")
+        draw.text((rx, y + s(36)), _truncate_text(draw, artist_text, a_font, rw), font=a_font, fill=DARK_GRAY, anchor="lm")
+        y += s(52)
 
-        dev_x1 = w - pad_x - right_block_w
-        dev_y1 = y + s(8)
-        dev_y2 = y + s(44)
+        # Compact Device pill + Switch button
+        sw_w = s(64)
+        dev_w = rw - sw_w - s(8)
+        dev_h = s(28)
         dev_label = f"On: {pb.device_name}" if pb.device_name else "No Device"
-        dev_font = self.fonts.for_text(dev_label, s(14), bold=True)
-        dev_box = (dev_x1, dev_y1, dev_x1 + dev_w, dev_y2)
-        draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
-        draw.text(((dev_box[0] + dev_box[2]) // 2, (dev_y1 + dev_y2) // 2), _truncate_text(draw, dev_label, dev_font, dev_w - s(12)), font=dev_font, fill=BLACK, anchor="mm")
+        dev_font = self.fonts.for_text(dev_label, s(13), bold=True)
+        dev_box = (rx, y, rx + dev_w, y + dev_h)
+        draw.rounded_rectangle(dev_box, radius=s(6), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
+        draw.text(((dev_box[0] + dev_box[2]) // 2, y + dev_h // 2), _truncate_text(draw, dev_label, dev_font, dev_w - s(10)), font=dev_font, fill=BLACK, anchor="mm")
         add_box(*dev_box, "cycle_device")
 
-        sw_box = (dev_box[2] + s(8), dev_y1, w - pad_x, dev_y2)
-        self._draw_pill_button(draw, sw_box, "Switch", self.fonts.get(s(14), bold=True), active=False, radius=s(7))
+        sw_box = (dev_box[2] + s(8), y, rx + rw, y + dev_h)
+        self._draw_pill_button(draw, sw_box, "Switch", self.fonts.get(s(13), bold=True), active=False, radius=s(6), outline_width=max(1, s(1)))
         add_box(*sw_box, "cycle_device")
-        y += s(64)
+        y += dev_h + s(14)
 
         # Row 1: Compact tappable/slidable progress bar
         bar_h = s(10)
-        draw.rounded_rectangle([pad_x, y, pad_x + inner_w, y + bar_h], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        draw.rounded_rectangle([rx, y, rx + rw, y + bar_h], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         if pb.duration_ms > 0:
             ratio = max(0.0, min(1.0, pb.progress_ms / pb.duration_ms))
-            fill_w = int(inner_w * ratio)
-            thumb_x = pad_x + fill_w
+            fill_w = int(rw * ratio)
+            thumb_x = rx + fill_w
             if fill_w > s(4):
-                draw.rounded_rectangle([pad_x, y, pad_x + fill_w, y + bar_h], radius=s(4), fill=BLACK)
+                draw.rounded_rectangle([rx, y, rx + fill_w, y + bar_h], radius=s(4), fill=BLACK)
             knob_r = s(7)
             draw.ellipse([thumb_x - knob_r, y + bar_h // 2 - knob_r, thumb_x + knob_r, y + bar_h // 2 + knob_r], fill=BLACK, outline=WHITE, width=max(1, s(2)))
-        add_box(pad_x - s(8), y - s(12), pad_x + inner_w + s(8), y + bar_h + s(20), "seek", bar_x1=pad_x, bar_x2=pad_x + inner_w)
+        add_box(rx - s(6), y - s(10), rx + rw + s(6), y + bar_h + s(18), "seek", bar_x1=rx, bar_x2=rx + rw)
 
-        time_font = self.fonts.get(s(14), bold=False)
-        draw.text((pad_x, y + bar_h + s(6)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
+        time_font = self.fonts.get(s(13), bold=False)
+        draw.text((rx, y + bar_h + s(5)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
         dur_str = _format_ms(pb.duration_ms)
-        draw.text((pad_x + inner_w - int(draw.textlength(dur_str, font=time_font)), y + bar_h + s(6)), dur_str, font=time_font, fill=DARK_GRAY)
-        y += s(40)
+        draw.text((rx + rw - int(draw.textlength(dur_str, font=time_font)), y + bar_h + s(5)), dur_str, font=time_font, fill=DARK_GRAY)
 
-        # Row 2: Big tactile controls [ Prev ] [ Play/Pause ] [ Next ] [ Like ] [ Shuffle ]
-        btn_h = s(76)
-        gap = s(14)
-        # Proportions: Prev(1) Play(1.5) Next(1) Like(1) Shuffle(1)
-        unit = (inner_w - gap * 4) / 5.5
+        # Anchor Row 2 (Controls) and Row 3 (Volume) neatly to bottom of Album Art
+        vol_h = s(50)
+        btn_h = s(64)
+        gap = s(10)
+        vol_y = art_y + art_size - vol_h
+        ctrl_y = vol_y - s(12) - btn_h
+
+        # Row 2: [ Prev ] [ Play/Pause ] [ Next ] [ Like ] [ Shuffle ]
+        unit = (rw - gap * 4) / 5.4
         w_std = int(unit)
-        w_play = inner_w - gap * 4 - w_std * 4
+        w_play = rw - gap * 4 - w_std * 4
 
-        bx = pad_x
-        prev_box = (bx, y, bx + w_std, y + btn_h); bx += w_std + gap
-        play_box = (bx, y, bx + w_play, y + btn_h); bx += w_play + gap
-        next_box = (bx, y, bx + w_std, y + btn_h); bx += w_std + gap
-        like_box = (bx, y, bx + w_std, y + btn_h); bx += w_std + gap
-        shuf_box = (bx, y, pad_x + inner_w, y + btn_h)
+        bx = rx
+        prev_box = (bx, ctrl_y, bx + w_std, ctrl_y + btn_h); bx += w_std + gap
+        play_box = (bx, ctrl_y, bx + w_play, ctrl_y + btn_h); bx += w_play + gap
+        next_box = (bx, ctrl_y, bx + w_std, ctrl_y + btn_h); bx += w_std + gap
+        like_box = (bx, ctrl_y, bx + w_std, ctrl_y + btn_h); bx += w_std + gap
+        shuf_box = (bx, ctrl_y, rx + rw, ctrl_y + btn_h)
 
-        draw.rounded_rectangle(prev_box, radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
-        self._draw_prev_icon(draw, (prev_box[0] + prev_box[2]) // 2, y + btn_h // 2, s(16), BLACK)
+        draw.rounded_rectangle(prev_box, radius=s(9), fill=WHITE, outline=BLACK, width=max(2, s(2)))
+        self._draw_prev_icon(draw, (prev_box[0] + prev_box[2]) // 2, ctrl_y + btn_h // 2, s(13), BLACK)
         add_box(*prev_box, "prev")
 
-        draw.rounded_rectangle(play_box, radius=s(10), fill=BLACK, outline=BLACK, width=max(2, s(2)))
+        draw.rounded_rectangle(play_box, radius=s(9), fill=BLACK, outline=BLACK, width=max(2, s(2)))
         if pb.is_playing:
-            self._draw_pause_icon(draw, (play_box[0] + play_box[2]) // 2, y + btn_h // 2, s(18), WHITE)
+            self._draw_pause_icon(draw, (play_box[0] + play_box[2]) // 2, ctrl_y + btn_h // 2, s(15), WHITE)
         else:
-            self._draw_play_icon(draw, (play_box[0] + play_box[2]) // 2, y + btn_h // 2, s(18), WHITE)
+            self._draw_play_icon(draw, (play_box[0] + play_box[2]) // 2, ctrl_y + btn_h // 2, s(15), WHITE)
         add_box(*play_box, "play_pause")
 
-        draw.rounded_rectangle(next_box, radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
-        self._draw_next_icon(draw, (next_box[0] + next_box[2]) // 2, y + btn_h // 2, s(16), BLACK)
+        draw.rounded_rectangle(next_box, radius=s(9), fill=WHITE, outline=BLACK, width=max(2, s(2)))
+        self._draw_next_icon(draw, (next_box[0] + next_box[2]) // 2, ctrl_y + btn_h // 2, s(13), BLACK)
         add_box(*next_box, "next")
 
         like_fill = BLACK if pb.is_liked else WHITE
         like_fg = WHITE if pb.is_liked else BLACK
-        draw.rounded_rectangle(like_box, radius=s(10), fill=like_fill, outline=BLACK, width=max(2, s(2)))
-        self._draw_heart_icon(draw, (like_box[0] + like_box[2]) // 2, y + btn_h // 2, s(14), filled=pb.is_liked, color=like_fg)
+        draw.rounded_rectangle(like_box, radius=s(9), fill=like_fill, outline=BLACK, width=max(2, s(2)))
+        self._draw_heart_icon(draw, (like_box[0] + like_box[2]) // 2, ctrl_y + btn_h // 2, s(12), filled=pb.is_liked, color=like_fg)
         add_box(*like_box, "like")
 
         shuf_fill = BLACK if pb.shuffle_state else WHITE
         shuf_fg = WHITE if pb.shuffle_state else BLACK
-        draw.rounded_rectangle(shuf_box, radius=s(10), fill=shuf_fill, outline=BLACK, width=max(2, s(2)))
-        self._draw_shuffle_icon(draw, (shuf_box[0] + shuf_box[2]) // 2, y + btn_h // 2, s(14), color=shuf_fg)
+        draw.rounded_rectangle(shuf_box, radius=s(9), fill=shuf_fill, outline=BLACK, width=max(2, s(2)))
+        self._draw_shuffle_icon(draw, (shuf_box[0] + shuf_box[2]) // 2, ctrl_y + btn_h // 2, s(12), color=shuf_fg)
         add_box(*shuf_box, "shuffle")
-        y += btn_h + s(16)
 
-        # Row 3: Wide Volume bar [ - ] [ Vol % bar ] [ + ]
-        vol_h = s(58)
-        vbtn_w = s(84)
-        vmin_box = (pad_x, y, pad_x + vbtn_w, y + vol_h)
-        vplus_box = (pad_x + inner_w - vbtn_w, y, pad_x + inner_w, y + vol_h)
-        vbar_x1 = pad_x + vbtn_w + s(16)
-        vbar_x2 = pad_x + inner_w - vbtn_w - s(16)
+        # Row 3: Compact Volume bar [ - ] [ Vol % bar ] [ + ]
+        vbtn_w = s(60)
+        vmin_box = (rx, vol_y, rx + vbtn_w, vol_y + vol_h)
+        vplus_box = (rx + rw - vbtn_w, vol_y, rx + rw, vol_y + vol_h)
+        vbar_x1 = rx + vbtn_w + s(10)
+        vbar_x2 = rx + rw - vbtn_w - s(10)
 
-        vol_font = self.fonts.get(s(28), bold=True)
-        self._draw_pill_button(draw, vmin_box, "-", vol_font, active=False, radius=s(10))
+        vol_font = self.fonts.get(s(24), bold=True)
+        self._draw_pill_button(draw, vmin_box, "-", vol_font, active=False, radius=s(9))
         add_box(*vmin_box, "vol_down")
-        self._draw_pill_button(draw, vplus_box, "+", vol_font, active=False, radius=s(10))
+        self._draw_pill_button(draw, vplus_box, "+", vol_font, active=False, radius=s(9))
         add_box(*vplus_box, "vol_up")
 
         vol_pct = pb.volume_percent if pb.volume_percent is not None else 0
-        vol_label = f"Volume {pb.volume_percent}%" if pb.volume_percent is not None else "Volume --"
-        vl_font = self.fonts.get(s(16), bold=True)
-        draw.text(((vbar_x1 + vbar_x2) // 2, y + s(14)), vol_label, font=vl_font, fill=BLACK, anchor="mm")
-        m_y1 = y + s(30)
-        m_y2 = y + s(46)
-        draw.rounded_rectangle([vbar_x1, m_y1, vbar_x2, m_y2], radius=s(5), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        vol_label = f"Vol {pb.volume_percent}%" if pb.volume_percent is not None else "Vol --"
+        vl_font = self.fonts.get(s(14), bold=True)
+        draw.text(((vbar_x1 + vbar_x2) // 2, vol_y + s(11)), vol_label, font=vl_font, fill=BLACK, anchor="mm")
+        m_y1 = vol_y + s(25)
+        m_y2 = vol_y + s(39)
+        draw.rounded_rectangle([vbar_x1, m_y1, vbar_x2, m_y2], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         if pb.volume_percent is not None and vol_pct > 0:
             fw = int((vbar_x2 - vbar_x1) * vol_pct / 100)
-            if fw > s(6):
-                draw.rounded_rectangle([vbar_x1, m_y1, vbar_x1 + fw, m_y2], radius=s(5), fill=BLACK)
+            if fw > s(5):
+                draw.rounded_rectangle([vbar_x1, m_y1, vbar_x1 + fw, m_y2], radius=s(4), fill=BLACK)
 
     def _render_pagination(
         self,

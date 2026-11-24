@@ -193,22 +193,33 @@ class TestStateMachine(unittest.TestCase):
 
     def test_sleep_mode_toggle_and_persistence(self) -> None:
         self.state.kindle_brightness = 14
+        self.state.sleep_brightness = 5
         res = self.state._execute_action("toggle_sleep", {})
         self.assertTrue(res["ok"])
         self.assertTrue(res["sleep_mode"])
         self.assertEqual(res["brightness"], 0)
-        self.assertEqual(res["sleep_wake_brightness"], 14)
+        self.assertEqual(res["sleep_wake_brightness"], 5)
+        self.assertEqual(self.state.view, ViewMode.SLEEP)
+
+        # Adjust independent sleep brightness without changing saved daytime brightness
+        self.state._execute_action("toggle_brightness", {})
+        self.assertTrue(self.state.editing_sleep_brightness)
+        bres = self.state._execute_action("brightness_set", {"level": 3})
+        self.assertEqual(bres["sleep_wake_brightness"], 3)
+        self.assertEqual(self.state.sleep_brightness, 3)
+        self.state._execute_action("toggle_brightness", {})
         self.assertEqual(self.state.view, ViewMode.SLEEP)
 
         # Staying in sleep mode even when playback stops/starts
         self.state.refresh_playback()
         self.assertEqual(self.state.view, ViewMode.SLEEP)
 
-        # Exiting sleep mode restores previous brightness
+        # Exiting sleep mode restores previous daytime brightness (14), keeping sleep brightness (3)
         res2 = self.state._execute_action("toggle_sleep", {})
         self.assertFalse(res2["sleep_mode"])
         self.assertEqual(res2["brightness"], 14)
         self.assertEqual(self.state.kindle_brightness, 14)
+        self.assertEqual(self.state.sleep_brightness, 3)
         self.assertNotEqual(self.state.view, ViewMode.SLEEP)
 
 

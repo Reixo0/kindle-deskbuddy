@@ -328,6 +328,11 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
             [ -n "$NEW_BRIGHT" ] && set_brightness "$NEW_BRIGHT"
             log "Exited sleep mode (restored brightness=${NEW_BRIGHT:-unchanged})"
         else
+            NEW_WAKE="$(echo "$RESP" | sed -n 's/.*"sleep_wake_brightness": *\([0-9][0-9]*\).*/\1/p')"
+            if [ -n "$NEW_WAKE" ] && [ -f "$SLEEP_FLAG" ]; then
+                echo "$NEW_WAKE" > "$SLEEP_FLAG"
+                log "Updated sleep wake brightness to $NEW_WAKE"
+            fi
             NEW_BRIGHT="$(echo "$RESP" | sed -n 's/.*"brightness": *\([0-9][0-9]*\).*/\1/p')"
             if [ -n "$NEW_BRIGHT" ]; then
                 log "Setting brightness to $NEW_BRIGHT"

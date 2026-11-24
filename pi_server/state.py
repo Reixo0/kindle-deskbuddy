@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 from .config import Settings
@@ -94,6 +96,8 @@ class DeskBuddyState:
         self.last_battery_at: float = 0.0
         self.kindle_brightness: int = 12  # Kindle frontlight scale 0..24
         self.saved_brightness: int = 12
+        self._prefs_path: Path = settings.spotify_cache_path.parent / ".deskbuddy_prefs.json"
+        self.sleep_brightness: int = self._load_sleep_brightness()
         self.brightness_dirty: bool = False
 
         self.status_banner: str = ""
@@ -106,6 +110,28 @@ class DeskBuddyState:
             settings.screen_width,
             settings.screen_height,
         )
+
+    def _load_sleep_brightness(self) -> int:
+        try:
+            if self._prefs_path.is_file():
+                data = json.loads(self._prefs_path.read_text(encoding="utf-8"))
+                return max(0, min(24, int(data.get("sleep_brightness", 6))))
+        except Exception:
+            pass
+        return 6
+
+    def _save_sleep_brightness(self) -> None:
+        try:
+            self._prefs_path.write_text(
+                json.dumps({"sleep_brightness": self.sleep_brightness}),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    @property
+    def editing_sleep_brightness(self) -> bool:
+        return self.view == ViewMode.BRIGHTNESS and self.previous_view == ViewMode.SLEEP
 
     def set_banner(self, message: str, ttl: float = 4.0) -> None:
         if message:
@@ -306,7 +332,7 @@ class DeskBuddyState:
                     "message": "Sleep mode off",
                 }
             self.saved_brightness = self.kindle_brightness
-            wake_level = self.saved_brightness if self.saved_brightness > 0 else 6
+            wake_level = self.sleep_brightness
             self.kindle_brightness = 0
             self.previous_view = self.view
             self._set_view(ViewMode.SLEEP)
@@ -328,14 +354,26 @@ class DeskBuddyState:
 
         if action == "brightness_set":
             val = max(0, min(24, int(payload.get("level", 12))))
+            pct = int(round(val * 100 / 24))
+            if self.editing_sleep_brightness:
+                self.sleep_brightness = val
+                self._save_sleep_brightness()
+                self.set_banner(f"Sleep Brightness {pct}%", ttl=2.0)
+                return {"ok": True, "brightness": val, "sleep_wake_brightness": val, "message": f"Sleep Brightness {pct}%"}
             self.kindle_brightness = val
             self.brightness_dirty = False
-            pct = int(round(val * 100 / 24))
             self.set_banner(f"Brightness {pct}%", ttl=2.0)
             return {"ok": True, "brightness": val, "message": f"Brightness {pct}%"}
 
         if action == "brightness_step":
             delta = int(payload.get("delta", 0))
+            if self.editing_sleep_brightness:
+                val = max(0, min(24, self.sleep_brightness + delta))
+                self.sleep_brightness = val
+                self._save_sleep_brightness()
+                pct = int(round(val * 100 / 24))
+                self.set_banner(f"Sleep Brightness {pct}%", ttl=2.0)
+                return {"ok": True, "brightness": val, "sleep_wake_brightness": val, "message": f"Sleep Brightness {pct}%"}
             val = max(0, min(24, self.kindle_brightness + delta))
             self.kindle_brightness = val
             self.brightness_dirty = False

@@ -2,6 +2,7 @@
 .env
 .spotify_cache
 .recent_history.json
+.deskbuddy_prefs.json
 kindle_client/deskbuddy.conf
 
 # Python virtual environment & caches
