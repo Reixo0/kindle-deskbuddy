@@ -1,19 +1,24 @@
 # Kindle Desk Buddy
 
-A lightweight, landscape e-ink **Spotify controller, synced lyrics viewer, and desk clock** for a jailbroken **Kindle 10th Generation**, powered by a **Raspberry Pi** over Wi-Fi. No KUAL required.
+A lightweight, landscape e-ink **Spotify controller, synced lyrics viewer, weather display, bedside sleep mode, and desk clock** for a jailbroken **Kindle 10th Generation**, powered by a **Raspberry Pi** over Wi-Fi. No KUAL required.
 
 ## Features
-- **Now Playing (Album Art + Big Clock + Synced Lyrics):**
-  - Prominent **Clock + Date** above large Floyd-Steinberg dithered **Album Art**.
-  - Complete playback controls: **Play/Pause**, **Previous**, **Next**, **Volume −/+**, **Shuffle**, **Like/Unlike**, and **tap/slide seeking** directly on the progress bar.
+- **Now Playing (Album Art + Big Clock + Weather + Synced Lyrics):**
+  - Prominent **Clock + Date + Weather** (`temp`, weather icon, `↑max ↓min`) above large Floyd-Steinberg dithered **Album Art**.
+  - Complete playback controls: **Play/Pause**, **Previous**, **Next**, **Volume −/+**, **Shuffle**, **Like/Unlike**, **tap/slide seeking** directly on the progress bar, and a **`Switch`** 1-tap device cycle button next to the active device pill.
   - **Live Synced Lyrics** powered by [LRCLIB](https://lrclib.net/) (free, no API key needed), showing previous, current, and upcoming lines with automatic **Japanese / CJK font support**.
+- **Weather ([Open-Meteo](https://open-meteo.com/)):** Free, no-API-key weather showing current temperature, custom e-ink weather icon, and daily `↑max ↓min` across **Now Playing**, **Standby Clock**, and **Sleep Mode** (refreshes every 15 minutes via automatic IP geolocation or `WEATHER_CITY` / `WEATHER_UNITS` in `.env`).
 - **Kindle Frontlight Brightness Controls:** Tap the **Sun (`☀`)** button in the top bar for `−`/`+` controls and **Off / Low / Med / High / Max** presets wired directly to the Kindle's native frontlight.
-- **Idle Clock Mode (5-minute auto-switch):** When no music has played for 5 minutes, switches to a giant desk clock with date, Kindle battery, and a **quick Playlists / Albums / Liked Songs selector** right below the clock.
-- **Full Library Browser:** Browse **Playlists** (first by default), **Albums**, **Liked Songs**, and **Recently Played**. Tap any playlist or album to browse and play individual songs, or tap **Play** to start it immediately.
-- **Queue & Device Selector:** Inspect your **Up Next** queue and switch playback between any active **Spotify Connect** device (speakers, PC, phone, Raspotify, etc.).
+- **Bedside Sleep Mode (`☾` button):**
+  - Turns the Kindle frontlight off until touched; the first touch wakes only the frontlight (preventing accidental clicks in the dark), then turns it back off after 15 seconds of inactivity.
+  - Displays the centered **Giant Clock + Weather** hero above **Album Art** + compact song controls (no lyrics).
+  - Features an independent, saved **Sleep Wake Brightness** (`☀` button inside Sleep Mode, persisted in `.deskbuddy_prefs.json`); exiting Sleep Mode or the app cleanly restores your original pre-sleep brightness.
+- **Standby Clock Mode:** Automatically switches to a centered **Giant Clock + Weather** hero after 5 minutes of paused playback **or** immediately when Spotify loses all active devices. Shows your **4 most recently played** Playlists or Albums (tracked live in `.recent_history.json`) or Liked Songs, with **Shuffle-Play (`⇄`)** on cards and 1-tap **`Switch`** device cycling in the header.
+- **Full Library Browser:** Browse **Playlists** (first by default), **Albums**, **Liked Songs**, and **Recently Played**. Tap any playlist or album to browse and play individual songs, tap **Play** to start it immediately, or tap **`⇄`** on any row or tracklist header to start it shuffled.
+- **Queue & Device Selector:** Inspect your **Up Next** queue — tapping a song jumps within the active playlist/album context (or remaining queue) so playback continues seamlessly — and switch devices via the **Devices** tab or 1-tap **`Switch`** button on Now Playing, Standby Clock, and Sleep Mode.
 - **Kindle Battery & Fast E-Ink Refresh:** Displays live Kindle battery % and charging status, updates every **2 seconds** while playing, skips unchanged redraws, and triggers periodic full-flashing refreshes to prevent ghosting.
 - **1-Tap Exit & Offline Failsafe:** Tap **`X`** in the top-right corner to exit cleanly—or **double-tap the top-right corner** at any time to exit locally even if the Pi is offline.
-- **Interactive Browser Preview (`/preview`):** Test and click through the entire UI from your PC or phone browser before deploying to the Kindle.
+- **Interactive Browser Preview (`/preview`):** Test and click through **Now Playing**, **Standby Clock**, **Sleep Mode**, **Library**, **Queue**, **Devices**, and **Brightness** from your PC or phone browser before deploying to the Kindle.
 
 > **Default port:** `8765` (chosen to avoid conflicting with Pi-hole or other services on port `8080`).
 
@@ -51,11 +56,19 @@ Create your local `.env` file from the template:
 cp .env.example .env
 ```
 
+*(Optional Weather Configuration)* Weather works automatically via IP geolocation if left blank, or you can set your city/coordinates and units in `.env`:
+```env
+WEATHER_CITY=
+WEATHER_LAT=
+WEATHER_LON=
+WEATHER_UNITS=C   # C or F
+```
+
 ### Quick Test (Demo Mode — no Spotify account needed yet)
 ```bash
 DEMO_MODE=1 uvicorn pi_server.app:app --host 0.0.0.0 --port 8765
 ```
-Open `http://<pi-ip>:8765/preview` in your browser to click through **Now Playing**, **Idle Clock**, **Library**, **Queue**, **Devices**, and **Brightness**. Press `Ctrl+C` to stop when you're ready to connect Spotify.
+Open `http://<pi-ip>:8765/preview` in your browser to click through **Now Playing**, **Standby Clock**, **Sleep Mode**, **Library**, **Queue**, **Devices**, and **Brightness**. Press `Ctrl+C` to stop when you're ready to connect Spotify.
 
 ---
 
@@ -162,6 +175,7 @@ Desk Buddy uses the Kindle's built-in `eips` for PNG rendering and KOReader's bu
 ### Troubleshooting & Logs
 - The Kindle client writes a log to `/mnt/us/deskbuddy/deskbuddy.log` (readable over USB).
 - If taps feel offset on a different Kindle model, run `sh /mnt/us/deskbuddy/deskbuddy.sh --test-touch` over SSH and adjust `TOUCH_MAX_X`, `TOUCH_MAX_Y`, `TOUCH_SWAP_XY`, `TOUCH_INVERT_X`, or `TOUCH_INVERT_Y` in `deskbuddy.conf`.
+- **Browser playback (e.g. Spotify Web Player in Firefox):** Browser autoplay policies can block remote playback on a freshly opened tab (no audio / stuck controls). Using the native Spotify desktop app works reliably, or allow Audio & Video autoplay for `open.spotify.com` in your browser settings.
 
 ---
 
@@ -172,7 +186,7 @@ Desk Buddy uses the Kindle's built-in `eips` for PNG rendering and KOReader's bu
 cd ~/kindle-deskbuddy
 git pull
 ```
-Then restart `uvicorn` (or `sudo systemctl restart kindle-deskbuddy` if using `systemd`). Your `.env` and `.spotify_cache` are ignored by Git and stay intact.
+Then restart `uvicorn` (or `sudo systemctl restart kindle-deskbuddy` if using `systemd`). Your `.env`, `.spotify_cache`, `.recent_history.json`, and `.deskbuddy_prefs.json` are ignored by Git and stay intact.
 
 ### Removing / Reinstalling on the Raspberry Pi
 If you want a fresh clone or want to completely uninstall Desk Buddy from your Pi:
