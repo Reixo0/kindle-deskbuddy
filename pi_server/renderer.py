@@ -444,6 +444,30 @@ class DeskBuddyRenderer:
         cr = int(r * 0.86)
         draw.ellipse([ox - cr, oy - cr, ox + cr, oy + cr], fill=bg)
 
+    def _draw_rotate_icon(
+        self,
+        draw: ImageDraw.ImageDraw,
+        cx: int,
+        cy: int,
+        r: int,
+        color: int,
+    ) -> None:
+        """Draw two opposing 180-degree curved arrows forming a rotate icon."""
+        w = max(2, int(r * 0.22))
+        bbox = [cx - r, cy - r, cx + r, cy + r]
+        draw.arc(bbox, 200, 340, fill=color, width=w)
+        draw.arc(bbox, 20, 160, fill=color, width=w)
+        ah = max(3, int(r * 0.45))
+        for deg in (340, 160):
+            rad = math.radians(deg)
+            nx, ny = math.cos(rad), math.sin(rad)
+            tx, ty = -ny, nx  # clockwise tangent
+            ax, ay = cx + nx * r, cy + ny * r
+            tip = (ax + tx * ah * 0.45, ay + ty * ah * 0.45)
+            back1 = (ax - tx * ah * 0.75 + nx * ah * 0.65, ay - ty * ah * 0.75 + ny * ah * 0.65)
+            back2 = (ax - tx * ah * 0.75 - nx * ah * 0.65, ay - ty * ah * 0.75 - ny * ah * 0.65)
+            draw.polygon([tip, back1, back2], fill=color)
+
     def _draw_cloud_shape(
         self,
         draw: ImageDraw.ImageDraw,
@@ -583,8 +607,8 @@ class DeskBuddyRenderer:
             ("Devices", ViewMode.DEVICES),
         ]
         font = self.fonts.get(s(17), bold=True)
-        pad_x = s(14)
-        cur_x = s(14)
+        pad_x = s(12)
+        cur_x = s(12)
         btn_y1 = s(9)
         btn_y2 = top_h - s(9)
         for label, mode in tabs:
@@ -596,9 +620,9 @@ class DeskBuddyRenderer:
             box = (cur_x, btn_y1, cur_x + bw, btn_y2)
             self._draw_pill_button(draw, box, label, font, active=active, radius=s(7))
             add_box(*box, "nav", view=mode.value)
-            cur_x += bw + s(10)
+            cur_x += bw + s(8)
 
-        # Right side: Exit button + Battery + Brightness button (+ compact clock on non-NowPlaying views)
+        # Right side: Exit + Battery + Brightness + Sleep + Rotate 180 (+ compact clock on non-NowPlaying views)
         cy = top_h // 2
         exit_w = s(38)
         exit_box = (w - s(12) - exit_w, btn_y1, w - s(12), btn_y2)
@@ -606,12 +630,12 @@ class DeskBuddyRenderer:
         add_box(*exit_box, "exit")
 
         left_of_batt = self._draw_battery(
-            draw, exit_box[0] - s(12), cy, state.kindle_battery, state.kindle_charging, s
+            draw, exit_box[0] - s(10), cy, state.kindle_battery, state.kindle_charging, s
         )
 
         # Brightness button with crisp sun icon
         bright_active = state.view == ViewMode.BRIGHTNESS
-        bright_w = s(40)
+        bright_w = s(38)
         bright_box = (left_of_batt - s(8) - bright_w, btn_y1, left_of_batt - s(8), btn_y2)
         draw.rounded_rectangle(
             bright_box,
@@ -630,18 +654,25 @@ class DeskBuddyRenderer:
         add_box(*bright_box, "toggle_brightness")
 
         # Sleep mode button with crisp crescent moon icon
-        sleep_w = s(40)
-        sleep_box = (bright_box[0] - s(8) - sleep_w, btn_y1, bright_box[0] - s(8), btn_y2)
+        sleep_w = s(38)
+        sleep_box = (bright_box[0] - s(6) - sleep_w, btn_y1, bright_box[0] - s(6), btn_y2)
         draw.rounded_rectangle(sleep_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         self._draw_moon_icon(draw, (sleep_box[0] + sleep_box[2]) // 2, cy, s(9), BLACK, WHITE)
         add_box(*sleep_box, "toggle_sleep")
+
+        # Rotate 180 button
+        rot_w = s(38)
+        rot_box = (sleep_box[0] - s(6) - rot_w, btn_y1, sleep_box[0] - s(6), btn_y2)
+        draw.rounded_rectangle(rot_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_rotate_icon(draw, (rot_box[0] + rot_box[2]) // 2, cy, s(9), BLACK)
+        add_box(*rot_box, "flip_180")
 
         # Show compact clock in top bar on Library/Queue/Devices/Brightness (Now Playing has the big clock)
         if state.view != ViewMode.NOW_PLAYING:
             clock_str = _format_clock(self.settings.time_format)
             clock_font = self.fonts.get(s(20), bold=True)
             cw = int(draw.textlength(clock_str, font=clock_font))
-            draw.text((sleep_box[0] - s(12) - cw, cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+            draw.text((rot_box[0] - s(10) - cw, cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
 
     def _render_banner(
         self,
@@ -1010,27 +1041,33 @@ class DeskBuddyRenderer:
         left_of_batt = self._draw_battery(
             draw, exit_box[0] - s(10), header_y, state.kindle_battery, state.kindle_charging, s
         )
-        bright_w = s(40)
+        bright_w = s(38)
         bright_box = (left_of_batt - s(8) - bright_w, s(10), left_of_batt - s(8), s(46))
         draw.rounded_rectangle(bright_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(10), BLACK)
         add_box(*bright_box, "toggle_brightness")
 
-        sleep_w = s(40)
-        sleep_box = (bright_box[0] - s(8) - sleep_w, s(10), bright_box[0] - s(8), s(46))
+        sleep_w = s(38)
+        sleep_box = (bright_box[0] - s(6) - sleep_w, s(10), bright_box[0] - s(6), s(46))
         draw.rounded_rectangle(sleep_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         self._draw_moon_icon(draw, (sleep_box[0] + sleep_box[2]) // 2, header_y, s(9), BLACK, WHITE)
         add_box(*sleep_box, "toggle_sleep")
 
+        rot_w = s(38)
+        rot_box = (sleep_box[0] - s(6) - rot_w, s(10), sleep_box[0] - s(6), s(46))
+        draw.rounded_rectangle(rot_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_rotate_icon(draw, (rot_box[0] + rot_box[2]) // 2, header_y, s(9), BLACK)
+        add_box(*rot_box, "flip_180")
+
         # 1-tap Switch Device button + active device name pill (opens full Devices list)
-        sw_w = s(64)
-        sw_box = (sleep_box[0] - s(8) - sw_w, s(10), sleep_box[0] - s(8), s(46))
+        sw_w = s(62)
+        sw_box = (rot_box[0] - s(8) - sw_w, s(10), rot_box[0] - s(8), s(46))
         self._draw_pill_button(draw, sw_box, "Switch", dev_btn_font, active=False, radius=s(7))
         add_box(*sw_box, "cycle_device")
 
         dev_name = state.playback.device_name
         dev_label = f"On: {dev_name}" if dev_name else "Devices"
-        dev_w = min(s(175), max(s(96), int(draw.textlength(dev_label, font=dev_btn_font)) + s(20)))
+        dev_w = min(s(160), max(s(88), int(draw.textlength(dev_label, font=dev_btn_font)) + s(18)))
         dev_box = (sw_box[0] - s(8) - dev_w, s(10), sw_box[0] - s(8), s(46))
         draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY if dev_name else WHITE, outline=BLACK, width=max(1, s(2)))
         draw.text(
@@ -1627,15 +1664,22 @@ class DeskBuddyRenderer:
         )
 
         # Independent Sleep Brightness button (sun icon)
-        bright_w = s(40)
+        bright_w = s(38)
         bright_box = (left_of_batt - s(8) - bright_w, s(10), left_of_batt - s(8), s(46))
         draw.rounded_rectangle(bright_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
         self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(10), BLACK)
         add_box(*bright_box, "toggle_brightness")
 
+        # Rotate 180 button
+        rot_w = s(38)
+        rot_box = (bright_box[0] - s(6) - rot_w, s(10), bright_box[0] - s(6), s(46))
+        draw.rounded_rectangle(rot_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_rotate_icon(draw, (rot_box[0] + rot_box[2]) // 2, header_y, s(9), BLACK)
+        add_box(*rot_box, "flip_180")
+
         # Active Sleep Mode pill (inverted black with crescent moon) — tap to exit Sleep Mode
-        sleep_w = s(100)
-        sleep_box = (bright_box[0] - s(8) - sleep_w, s(10), bright_box[0] - s(8), s(46))
+        sleep_w = s(98)
+        sleep_box = (rot_box[0] - s(8) - sleep_w, s(10), rot_box[0] - s(8), s(46))
         draw.rounded_rectangle(sleep_box, radius=s(7), fill=BLACK, outline=BLACK, width=max(1, s(2)))
         self._draw_moon_icon(draw, sleep_box[0] + s(20), header_y, s(9), WHITE, BLACK)
         draw.text((sleep_box[0] + s(37), header_y), "Sleep", font=btn_font, fill=WHITE, anchor="lm")

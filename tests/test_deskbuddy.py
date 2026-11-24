@@ -239,6 +239,32 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(self.state.kindle_brightness, 0)
         self.assertNotEqual(self.state.view, ViewMode.SLEEP)
 
+    def test_flip_180_rotation_and_persistence(self) -> None:
+        self.assertFalse(self.state.flipped_180)
+        self.assertEqual(self.state.effective_rotation(90), 90)
+        self.state.sleep_brightness = 4
+        self.state.needs_full_refresh = False
+
+        res = self.state._execute_action("flip_180", {})
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["flipped_180"])
+        self.assertTrue(self.state.flipped_180)
+        self.assertTrue(self.state.needs_full_refresh)
+        self.assertEqual(self.state.effective_rotation(90), 270)
+        self.assertEqual(self.state.effective_rotation(270), 90)
+
+        # Fresh state loads persisted flipped_180 and sleep_brightness
+        reloaded = DeskBuddyState(self.settings, self.spotify)
+        self.assertTrue(reloaded.flipped_180)
+        self.assertEqual(reloaded.sleep_brightness, 4)
+        self.assertEqual(reloaded.effective_rotation(90), 270)
+
+        # Toggle back
+        res2 = reloaded._execute_action("flip_180", {})
+        self.assertFalse(res2["flipped_180"])
+        self.assertFalse(reloaded.flipped_180)
+        self.assertEqual(reloaded.effective_rotation(90), 90)
+
 
 class TestRendererOptional(unittest.TestCase):
     def test_render_all_views_if_pillow_installed(self) -> None:

@@ -97,7 +97,9 @@ class DeskBuddyState:
         self.kindle_brightness: int = 12  # Kindle frontlight scale 0..24
         self.saved_brightness: int = 12
         self._prefs_path: Path = settings.spotify_cache_path.parent / ".deskbuddy_prefs.json"
-        self.sleep_brightness: int = self._load_sleep_brightness()
+        self.sleep_brightness: int = 6
+        self.flipped_180: bool = False
+        self._load_prefs()
         self.brightness_dirty: bool = False
 
         self.status_banner: str = ""
@@ -111,23 +113,31 @@ class DeskBuddyState:
             settings.screen_height,
         )
 
-    def _load_sleep_brightness(self) -> int:
+    def _load_prefs(self) -> None:
         try:
             if self._prefs_path.is_file():
                 data = json.loads(self._prefs_path.read_text(encoding="utf-8"))
-                return max(0, min(24, int(data.get("sleep_brightness", 6))))
+                self.sleep_brightness = max(0, min(24, int(data.get("sleep_brightness", 6))))
+                self.flipped_180 = bool(data.get("flipped_180", False))
         except Exception:
             pass
-        return 6
 
-    def _save_sleep_brightness(self) -> None:
+    def _save_prefs(self) -> None:
         try:
             self._prefs_path.write_text(
-                json.dumps({"sleep_brightness": self.sleep_brightness}),
+                json.dumps(
+                    {
+                        "sleep_brightness": self.sleep_brightness,
+                        "flipped_180": self.flipped_180,
+                    }
+                ),
                 encoding="utf-8",
             )
         except Exception:
             pass
+
+    def effective_rotation(self, base_rotation_cw: int) -> int:
+        return (base_rotation_cw + (180 if self.flipped_180 else 0)) % 360
 
     @property
     def editing_sleep_brightness(self) -> bool:
@@ -312,6 +322,8 @@ class DeskBuddyState:
                 res_dict["sleep_mode"] = result["sleep_mode"]
             if "sleep_wake_brightness" in result:
                 res_dict["sleep_wake_brightness"] = result["sleep_wake_brightness"]
+            if "flipped_180" in result:
+                res_dict["flipped_180"] = result["flipped_180"]
             return res_dict
 
     def _execute_action(
@@ -335,6 +347,17 @@ class DeskBuddyState:
                     "message": "Exiting Desk Buddy",
                 }
             return {"ok": True, "exit": True, "message": "Exiting Desk Buddy"}
+
+        if action == "flip_180":
+            self.flipped_180 = not self.flipped_180
+            self._save_prefs()
+            self.needs_full_refresh = True
+            self.set_banner("Rotated 180°", ttl=2.0)
+            return {
+                "ok": True,
+                "flipped_180": self.flipped_180,
+                "message": "Rotated 180°",
+            }
 
         if action == "toggle_sleep":
             if self.view == ViewMode.SLEEP:
@@ -374,7 +397,7 @@ class DeskBuddyState:
             pct = int(round(val * 100 / 24))
             if self.editing_sleep_brightness:
                 self.sleep_brightness = val
-                self._save_sleep_brightness()
+                self._save_prefs()
                 self.set_banner(f"Sleep Brightness {pct}%", ttl=2.0)
                 return {"ok": True, "brightness": val, "sleep_wake_brightness": val, "message": f"Sleep Brightness {pct}%"}
             self.kindle_brightness = val
@@ -387,7 +410,7 @@ class DeskBuddyState:
             if self.editing_sleep_brightness:
                 val = max(0, min(24, self.sleep_brightness + delta))
                 self.sleep_brightness = val
-                self._save_sleep_brightness()
+                self._save_prefs()
                 pct = int(round(val * 100 / 24))
                 self.set_banner(f"Sleep Brightness {pct}%", ttl=2.0)
                 return {"ok": True, "brightness": val, "sleep_wake_brightness": val, "message": f"Sleep Brightness {pct}%"}
@@ -568,6 +591,7 @@ class DeskBuddyState:
                 "liked": self.playback.is_liked,
                 "kindle_battery": self.kindle_battery,
                 "kindle_charging": self.kindle_charging,
+                "flipped_180": self.flipped_180,
                 "idle_seconds": int(max(0.0, now - self.last_playing_at)),
                 "idle_timeout_seconds": self.settings.idle_timeout_seconds,
             }

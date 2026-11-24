@@ -27,6 +27,7 @@ class TapPayload(BaseModel):
     rotate: Optional[int] = None
     battery: Optional[int] = None
     charging: Optional[bool] = None
+    preview: bool = False
 
 
 def create_app(settings: Optional[Settings] = None) -> FastAPI:
@@ -73,7 +74,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
         req_w = w or cfg.screen_width
         req_h = h or cfg.screen_height
-        rot = 0 if preview else (cfg.rotation if rotate is None else rotate)
+        base_rot = cfg.rotation if rotate is None else rotate
+        rot = 0 if preview else state.effective_rotation(base_rot)
 
         png_bytes, digest, full_refresh = renderer.render(
             state=state,
@@ -107,7 +109,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     def post_tap(payload: TapPayload) -> JSONResponse:
         if payload.battery is not None or payload.charging is not None:
             state.update_battery(payload.battery, payload.charging)
-        rot = cfg.rotation if payload.rotate is None else payload.rotate
+        base_rot = cfg.rotation if payload.rotate is None else payload.rotate
+        rot = 0 if payload.preview else state.effective_rotation(base_rot)
         result = state.handle_tap(payload.x, payload.y, rotation_cw=rot)
         return JSONResponse(result)
 
@@ -125,7 +128,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 battery=battery,
                 charging=(bool(charging) if charging is not None else None),
             )
-        rot = cfg.rotation if rotate is None else rotate
+        base_rot = cfg.rotation if rotate is None else rotate
+        rot = state.effective_rotation(base_rot)
         result = state.handle_tap(x, y, rotation_cw=rot)
         return JSONResponse(result)
 
@@ -286,7 +290,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
       const res = await fetch('/api/tap', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify({{ x, y, rotate: 0, battery: b, charging: c }})
+        body: JSON.stringify({{ x, y, rotate: 0, preview: true, battery: b, charging: c }})
       }});
       const data = await res.json();
       log.textContent = `Tap (${{x}}, ${{y}}) -> action=${{data.action}} view=${{data.view}} ${{data.message || ''}}`;
