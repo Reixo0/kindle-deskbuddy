@@ -236,6 +236,8 @@ class DeskBuddyRenderer:
 
         if state.view == ViewMode.IDLE_CLOCK:
             self._render_idle_clock(img, draw, state, logical_w, logical_h, s, add_box)
+        elif state.view == ViewMode.SLEEP:
+            self._render_sleep(draw, state, logical_w, logical_h, s, add_box)
         else:
             top_h = s(54)
             self._render_top_bar(draw, state, logical_w, top_h, s, add_box)
@@ -426,6 +428,22 @@ class DeskBuddyRenderer:
             y2 = cy + int(math.sin(rad) * r)
             draw.line([(x1, y1), (x2, y2)], fill=color, width=w)
 
+    def _draw_moon_icon(
+        self,
+        draw: ImageDraw.ImageDraw,
+        cx: int,
+        cy: int,
+        r: int,
+        fg: int,
+        bg: int,
+    ) -> None:
+        """Draw a crisp crescent moon by carving an offset circle out of a disk."""
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fg)
+        ox = cx + int(r * 0.42)
+        oy = cy - int(r * 0.22)
+        cr = int(r * 0.86)
+        draw.ellipse([ox - cr, oy - cr, ox + cr, oy + cr], fill=bg)
+
     def _draw_cloud_shape(
         self,
         draw: ImageDraw.ImageDraw,
@@ -593,7 +611,7 @@ class DeskBuddyRenderer:
 
         # Brightness button with crisp sun icon
         bright_active = state.view == ViewMode.BRIGHTNESS
-        bright_w = s(44)
+        bright_w = s(40)
         bright_box = (left_of_batt - s(8) - bright_w, btn_y1, left_of_batt - s(8), btn_y2)
         draw.rounded_rectangle(
             bright_box,
@@ -606,17 +624,24 @@ class DeskBuddyRenderer:
             draw,
             (bright_box[0] + bright_box[2]) // 2,
             cy,
-            s(11),
+            s(10),
             WHITE if bright_active else BLACK,
         )
         add_box(*bright_box, "toggle_brightness")
 
+        # Sleep mode button with crisp crescent moon icon
+        sleep_w = s(40)
+        sleep_box = (bright_box[0] - s(8) - sleep_w, btn_y1, bright_box[0] - s(8), btn_y2)
+        draw.rounded_rectangle(sleep_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_moon_icon(draw, (sleep_box[0] + sleep_box[2]) // 2, cy, s(9), BLACK, WHITE)
+        add_box(*sleep_box, "toggle_sleep")
+
         # Show compact clock in top bar on Library/Queue/Devices/Brightness (Now Playing has the big clock)
         if state.view != ViewMode.NOW_PLAYING:
             clock_str = _format_clock(self.settings.time_format)
-            clock_font = self.fonts.get(s(21), bold=True)
+            clock_font = self.fonts.get(s(20), bold=True)
             cw = int(draw.textlength(clock_str, font=clock_font))
-            draw.text((bright_box[0] - s(14) - cw, cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+            draw.text((sleep_box[0] - s(12) - cw, cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
 
     def _render_banner(
         self,
@@ -985,21 +1010,27 @@ class DeskBuddyRenderer:
         left_of_batt = self._draw_battery(
             draw, exit_box[0] - s(10), header_y, state.kindle_battery, state.kindle_charging, s
         )
-        bright_w = s(42)
+        bright_w = s(40)
         bright_box = (left_of_batt - s(8) - bright_w, s(10), left_of_batt - s(8), s(46))
         draw.rounded_rectangle(bright_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
-        self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(11), BLACK)
+        self._draw_sun_icon(draw, (bright_box[0] + bright_box[2]) // 2, header_y, s(10), BLACK)
         add_box(*bright_box, "toggle_brightness")
 
+        sleep_w = s(40)
+        sleep_box = (bright_box[0] - s(8) - sleep_w, s(10), bright_box[0] - s(8), s(46))
+        draw.rounded_rectangle(sleep_box, radius=s(7), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        self._draw_moon_icon(draw, (sleep_box[0] + sleep_box[2]) // 2, header_y, s(9), BLACK, WHITE)
+        add_box(*sleep_box, "toggle_sleep")
+
         # 1-tap Switch Device button + active device name pill (opens full Devices list)
-        sw_w = s(68)
-        sw_box = (bright_box[0] - s(8) - sw_w, s(10), bright_box[0] - s(8), s(46))
+        sw_w = s(64)
+        sw_box = (sleep_box[0] - s(8) - sw_w, s(10), sleep_box[0] - s(8), s(46))
         self._draw_pill_button(draw, sw_box, "Switch", dev_btn_font, active=False, radius=s(7))
         add_box(*sw_box, "cycle_device")
 
         dev_name = state.playback.device_name
         dev_label = f"On: {dev_name}" if dev_name else "Devices"
-        dev_w = min(s(200), max(s(108), int(draw.textlength(dev_label, font=dev_btn_font)) + s(24)))
+        dev_w = min(s(175), max(s(96), int(draw.textlength(dev_label, font=dev_btn_font)) + s(20)))
         dev_box = (sw_box[0] - s(8) - dev_w, s(10), sw_box[0] - s(8), s(46))
         draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY if dev_name else WHITE, outline=BLACK, width=max(1, s(2)))
         draw.text(
@@ -1012,62 +1043,7 @@ class DeskBuddyRenderer:
         add_box(*dev_box, "nav", view=ViewMode.DEVICES.value)
 
         # Hero Clock + Weather centered cleanly as one balanced group
-        clock_str = _format_clock(self.settings.time_format)
-        weather = state.weather.get_weather()
-        hero_cy = s(145)
-        if weather is not None:
-            clock_size = s(124) if self.settings.time_format == "24h" else s(94)
-            clock_font = self.fonts.get(clock_size, bold=True)
-            temp_str = f"{round(weather.temp)}°{weather.unit}"
-            temp_font = self.fonts.get(s(40), bold=True)
-            mm_font = self.fonts.get(s(17), bold=True)
-            cond_font = self.fonts.get(s(15), bold=True)
-
-            clock_w = int(draw.textlength(clock_str, font=clock_font))
-            cond_w = int(draw.textlength(weather.label, font=cond_font))
-            icon_col_w = max(s(66), cond_w)
-            temp_w = int(draw.textlength(temp_str, font=temp_font))
-            mm_est_w = int(draw.textlength(f"{round(weather.temp_max)}°{round(weather.temp_min)}°", font=mm_font)) + s(40)
-            right_col_w = max(temp_w, mm_est_w)
-
-            div_gap = s(36)
-            col_gap = s(16)
-            weather_w = icon_col_w + col_gap + right_col_w
-            total_w = clock_w + div_gap + weather_w
-            start_x = max(s(24), (w - total_w) // 2)
-
-            draw.text((start_x, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
-
-            # Subtle vertical divider between Clock and Weather
-            div_x = start_x + clock_w + div_gap // 2
-            draw.line([(div_x, s(82)), (div_x, s(212))], fill=MID_GRAY, width=max(1, s(1)))
-
-            # Left weather sub-column: Icon on top, condition label right below it
-            icon_cx = start_x + clock_w + div_gap + icon_col_w // 2
-            top_row_y = hero_cy - s(16)
-            bot_row_y = hero_cy + s(26)
-            self._draw_weather_icon(draw, icon_cx, top_row_y, s(24), weather.condition)
-            draw.text((icon_cx, bot_row_y), weather.label, font=cond_font, fill=DARK_GRAY, anchor="mm")
-
-            # Right weather sub-column: Big Temp on top, ↑max ↓min aligned right beside condition label
-            rx_temp = start_x + clock_w + div_gap + icon_col_w + col_gap
-            draw.text((rx_temp, top_row_y), temp_str, font=temp_font, fill=BLACK, anchor="lm")
-            self._draw_minmax_arrows(
-                draw,
-                rx_temp,
-                bot_row_y,
-                weather.temp_max,
-                weather.temp_min,
-                mm_font,
-                s(12),
-                DARK_GRAY,
-                s,
-                align_right=False,
-            )
-        else:
-            clock_size = s(136) if self.settings.time_format == "24h" else s(108)
-            clock_font = self.fonts.get(clock_size, bold=True)
-            draw.text((w // 2, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="mm")
+        self._draw_clock_weather_hero(draw, state, w, s(145), s)
 
         sub_font = self.fonts.get(s(15), bold=False)
         subtitle = "Standby  ·  Recently played below (tap card to play, or right icon to shuffle)"
@@ -1549,6 +1525,233 @@ class DeskBuddyRenderer:
             active = abs(level - pval) <= 1
             self._draw_pill_button(draw, (px1, py1, px2, py2), label, p_font, active=active, radius=s(10))
             add_box(px1, py1, px2, py2, "brightness_set", level=pval)
+
+    # ------------------------------------------------------------------
+    # SHARED HERO: Centered Giant Clock + Weather (Standby & Sleep Mode)
+    # ------------------------------------------------------------------
+    def _draw_clock_weather_hero(
+        self,
+        draw: ImageDraw.ImageDraw,
+        state: DeskBuddyState,
+        w: int,
+        hero_cy: int,
+        s,
+    ) -> None:
+        clock_str = _format_clock(self.settings.time_format)
+        weather = state.weather.get_weather()
+        if weather is not None:
+            clock_size = s(124) if self.settings.time_format == "24h" else s(94)
+            clock_font = self.fonts.get(clock_size, bold=True)
+            temp_str = f"{round(weather.temp)}°{weather.unit}"
+            temp_font = self.fonts.get(s(40), bold=True)
+            mm_font = self.fonts.get(s(17), bold=True)
+            cond_font = self.fonts.get(s(15), bold=True)
+
+            clock_w = int(draw.textlength(clock_str, font=clock_font))
+            cond_w = int(draw.textlength(weather.label, font=cond_font))
+            icon_col_w = max(s(66), cond_w)
+            temp_w = int(draw.textlength(temp_str, font=temp_font))
+            mm_est_w = int(draw.textlength(f"{round(weather.temp_max)}°{round(weather.temp_min)}°", font=mm_font)) + s(40)
+            right_col_w = max(temp_w, mm_est_w)
+
+            div_gap = s(36)
+            col_gap = s(16)
+            weather_w = icon_col_w + col_gap + right_col_w
+            total_w = clock_w + div_gap + weather_w
+            start_x = max(s(24), (w - total_w) // 2)
+
+            draw.text((start_x, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="lm")
+
+            div_x = start_x + clock_w + div_gap // 2
+            draw.line([(div_x, hero_cy - s(63)), (div_x, hero_cy + s(67))], fill=MID_GRAY, width=max(1, s(1)))
+
+            icon_cx = start_x + clock_w + div_gap + icon_col_w // 2
+            top_row_y = hero_cy - s(16)
+            bot_row_y = hero_cy + s(26)
+            self._draw_weather_icon(draw, icon_cx, top_row_y, s(24), weather.condition)
+            draw.text((icon_cx, bot_row_y), weather.label, font=cond_font, fill=DARK_GRAY, anchor="mm")
+
+            rx_temp = start_x + clock_w + div_gap + icon_col_w + col_gap
+            draw.text((rx_temp, top_row_y), temp_str, font=temp_font, fill=BLACK, anchor="lm")
+            self._draw_minmax_arrows(
+                draw,
+                rx_temp,
+                bot_row_y,
+                weather.temp_max,
+                weather.temp_min,
+                mm_font,
+                s(12),
+                DARK_GRAY,
+                s,
+                align_right=False,
+            )
+        else:
+            clock_size = s(136) if self.settings.time_format == "24h" else s(108)
+            clock_font = self.fonts.get(clock_size, bold=True)
+            draw.text((w // 2, hero_cy), clock_str, font=clock_font, fill=BLACK, anchor="mm")
+
+    # ------------------------------------------------------------------
+    # 8. BEDSIDE SLEEP MODE (Giant Clock + Weather + Minimized Song Controls)
+    # ------------------------------------------------------------------
+    def _render_sleep(
+        self,
+        draw: ImageDraw.ImageDraw,
+        state: DeskBuddyState,
+        w: int,
+        h: int,
+        s,
+        add_box,
+    ) -> None:
+        pb = state.playback
+        header_y = s(28)
+        date_font = self.fonts.get(s(20), bold=True)
+        draw.text((s(24), header_y), _format_date(), font=date_font, fill=BLACK, anchor="lm")
+
+        # Right header: [ ☾ Wake ] + Battery + [ X ]
+        btn_font = self.fonts.get(s(15), bold=True)
+        exit_box = (w - s(18) - s(38), s(10), w - s(18), s(46))
+        self._draw_pill_button(draw, exit_box, "X", btn_font, active=False, radius=s(7))
+        add_box(*exit_box, "exit")
+
+        left_of_batt = self._draw_battery(
+            draw, exit_box[0] - s(12), header_y, state.kindle_battery, state.kindle_charging, s
+        )
+
+        # Active Sleep Mode pill (inverted black with crescent moon) — tap to exit Sleep Mode
+        sleep_w = s(106)
+        sleep_box = (left_of_batt - s(10) - sleep_w, s(10), left_of_batt - s(10), s(46))
+        draw.rounded_rectangle(sleep_box, radius=s(7), fill=BLACK, outline=BLACK, width=max(1, s(2)))
+        self._draw_moon_icon(draw, sleep_box[0] + s(22), header_y, s(9), WHITE, BLACK)
+        draw.text((sleep_box[0] + s(40), header_y), "Sleep", font=btn_font, fill=WHITE, anchor="lm")
+        add_box(*sleep_box, "toggle_sleep")
+
+        # Giant Clock + Weather hero (same as Standby Clock)
+        self._draw_clock_weather_hero(draw, state, w, s(156), s)
+
+        # Clean divider separating clock from minimized song controls
+        div_y = s(266)
+        draw.line([(s(24), div_y), (w - s(24), div_y)], fill=BLACK, width=max(1, s(2)))
+
+        # Minimized Song Controls UI (no lyrics, no album art — big sleepy-friendly targets)
+        pad_x = s(28)
+        inner_w = w - pad_x * 2
+        y = div_y + s(18)
+
+        # Row 0: Track title + artist on left; Device pill + Switch on right
+        sw_w = s(70)
+        dev_w = s(170)
+        right_block_w = dev_w + s(8) + sw_w
+        meta_w = inner_w - right_block_w - s(16)
+
+        title_text = pb.track_name or "Nothing Playing"
+        artist_text = pb.artist_name or "Tap Play or Switch to resume"
+        t_font = self.fonts.for_text(title_text, s(24), bold=True)
+        a_font = self.fonts.for_text(artist_text, s(17), bold=False)
+        draw.text((pad_x, y + s(13)), _truncate_text(draw, title_text, t_font, meta_w), font=t_font, fill=BLACK, anchor="lm")
+        draw.text((pad_x, y + s(40)), _truncate_text(draw, artist_text, a_font, meta_w), font=a_font, fill=DARK_GRAY, anchor="lm")
+
+        dev_x1 = w - pad_x - right_block_w
+        dev_y1 = y + s(8)
+        dev_y2 = y + s(44)
+        dev_label = f"On: {pb.device_name}" if pb.device_name else "No Device"
+        dev_font = self.fonts.for_text(dev_label, s(14), bold=True)
+        dev_box = (dev_x1, dev_y1, dev_x1 + dev_w, dev_y2)
+        draw.rounded_rectangle(dev_box, radius=s(7), fill=LIGHT_GRAY, outline=BLACK, width=max(1, s(1)))
+        draw.text(((dev_box[0] + dev_box[2]) // 2, (dev_y1 + dev_y2) // 2), _truncate_text(draw, dev_label, dev_font, dev_w - s(12)), font=dev_font, fill=BLACK, anchor="mm")
+        add_box(*dev_box, "cycle_device")
+
+        sw_box = (dev_box[2] + s(8), dev_y1, w - pad_x, dev_y2)
+        self._draw_pill_button(draw, sw_box, "Switch", self.fonts.get(s(14), bold=True), active=False, radius=s(7))
+        add_box(*sw_box, "cycle_device")
+        y += s(64)
+
+        # Row 1: Compact tappable/slidable progress bar
+        bar_h = s(10)
+        draw.rounded_rectangle([pad_x, y, pad_x + inner_w, y + bar_h], radius=s(4), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        if pb.duration_ms > 0:
+            ratio = max(0.0, min(1.0, pb.progress_ms / pb.duration_ms))
+            fill_w = int(inner_w * ratio)
+            thumb_x = pad_x + fill_w
+            if fill_w > s(4):
+                draw.rounded_rectangle([pad_x, y, pad_x + fill_w, y + bar_h], radius=s(4), fill=BLACK)
+            knob_r = s(7)
+            draw.ellipse([thumb_x - knob_r, y + bar_h // 2 - knob_r, thumb_x + knob_r, y + bar_h // 2 + knob_r], fill=BLACK, outline=WHITE, width=max(1, s(2)))
+        add_box(pad_x - s(8), y - s(12), pad_x + inner_w + s(8), y + bar_h + s(20), "seek", bar_x1=pad_x, bar_x2=pad_x + inner_w)
+
+        time_font = self.fonts.get(s(14), bold=False)
+        draw.text((pad_x, y + bar_h + s(6)), _format_ms(pb.progress_ms), font=time_font, fill=DARK_GRAY)
+        dur_str = _format_ms(pb.duration_ms)
+        draw.text((pad_x + inner_w - int(draw.textlength(dur_str, font=time_font)), y + bar_h + s(6)), dur_str, font=time_font, fill=DARK_GRAY)
+        y += s(40)
+
+        # Row 2: Big tactile controls [ Prev ] [ Play/Pause ] [ Next ] [ Like ] [ Shuffle ]
+        btn_h = s(76)
+        gap = s(14)
+        # Proportions: Prev(1) Play(1.5) Next(1) Like(1) Shuffle(1)
+        unit = (inner_w - gap * 4) / 5.5
+        w_std = int(unit)
+        w_play = inner_w - gap * 4 - w_std * 4
+
+        bx = pad_x
+        prev_box = (bx, y, bx + w_std, y + btn_h); bx += w_std + gap
+        play_box = (bx, y, bx + w_play, y + btn_h); bx += w_play + gap
+        next_box = (bx, y, bx + w_std, y + btn_h); bx += w_std + gap
+        like_box = (bx, y, bx + w_std, y + btn_h); bx += w_std + gap
+        shuf_box = (bx, y, pad_x + inner_w, y + btn_h)
+
+        draw.rounded_rectangle(prev_box, radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
+        self._draw_prev_icon(draw, (prev_box[0] + prev_box[2]) // 2, y + btn_h // 2, s(16), BLACK)
+        add_box(*prev_box, "prev")
+
+        draw.rounded_rectangle(play_box, radius=s(10), fill=BLACK, outline=BLACK, width=max(2, s(2)))
+        if pb.is_playing:
+            self._draw_pause_icon(draw, (play_box[0] + play_box[2]) // 2, y + btn_h // 2, s(18), WHITE)
+        else:
+            self._draw_play_icon(draw, (play_box[0] + play_box[2]) // 2, y + btn_h // 2, s(18), WHITE)
+        add_box(*play_box, "play_pause")
+
+        draw.rounded_rectangle(next_box, radius=s(10), fill=WHITE, outline=BLACK, width=max(2, s(2)))
+        self._draw_next_icon(draw, (next_box[0] + next_box[2]) // 2, y + btn_h // 2, s(16), BLACK)
+        add_box(*next_box, "next")
+
+        like_fill = BLACK if pb.is_liked else WHITE
+        like_fg = WHITE if pb.is_liked else BLACK
+        draw.rounded_rectangle(like_box, radius=s(10), fill=like_fill, outline=BLACK, width=max(2, s(2)))
+        self._draw_heart_icon(draw, (like_box[0] + like_box[2]) // 2, y + btn_h // 2, s(14), filled=pb.is_liked, color=like_fg)
+        add_box(*like_box, "like")
+
+        shuf_fill = BLACK if pb.shuffle_state else WHITE
+        shuf_fg = WHITE if pb.shuffle_state else BLACK
+        draw.rounded_rectangle(shuf_box, radius=s(10), fill=shuf_fill, outline=BLACK, width=max(2, s(2)))
+        self._draw_shuffle_icon(draw, (shuf_box[0] + shuf_box[2]) // 2, y + btn_h // 2, s(14), color=shuf_fg)
+        add_box(*shuf_box, "shuffle")
+        y += btn_h + s(16)
+
+        # Row 3: Wide Volume bar [ - ] [ Vol % bar ] [ + ]
+        vol_h = s(58)
+        vbtn_w = s(84)
+        vmin_box = (pad_x, y, pad_x + vbtn_w, y + vol_h)
+        vplus_box = (pad_x + inner_w - vbtn_w, y, pad_x + inner_w, y + vol_h)
+        vbar_x1 = pad_x + vbtn_w + s(16)
+        vbar_x2 = pad_x + inner_w - vbtn_w - s(16)
+
+        vol_font = self.fonts.get(s(28), bold=True)
+        self._draw_pill_button(draw, vmin_box, "-", vol_font, active=False, radius=s(10))
+        add_box(*vmin_box, "vol_down")
+        self._draw_pill_button(draw, vplus_box, "+", vol_font, active=False, radius=s(10))
+        add_box(*vplus_box, "vol_up")
+
+        vol_pct = pb.volume_percent if pb.volume_percent is not None else 0
+        vol_label = f"Volume {pb.volume_percent}%" if pb.volume_percent is not None else "Volume --"
+        vl_font = self.fonts.get(s(16), bold=True)
+        draw.text(((vbar_x1 + vbar_x2) // 2, y + s(14)), vol_label, font=vl_font, fill=BLACK, anchor="mm")
+        m_y1 = y + s(30)
+        m_y2 = y + s(46)
+        draw.rounded_rectangle([vbar_x1, m_y1, vbar_x2, m_y2], radius=s(5), fill=WHITE, outline=BLACK, width=max(1, s(2)))
+        if pb.volume_percent is not None and vol_pct > 0:
+            fw = int((vbar_x2 - vbar_x1) * vol_pct / 100)
+            if fw > s(6):
+                draw.rounded_rectangle([vbar_x1, m_y1, vbar_x1 + fw, m_y2], radius=s(5), fill=BLACK)
 
     def _render_pagination(
         self,

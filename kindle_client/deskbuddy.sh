@@ -29,6 +29,8 @@ PID_FILE="$TMP_DIR/deskbuddy.pid"
 TOUCH_PID_FILE="$TMP_DIR/touch.pid"
 DIRTY_FLAG="$TMP_DIR/dirty"
 EXIT_FLAG="$TMP_DIR/exit"
+SLEEP_FLAG="$TMP_DIR/sleep_mode"
+LIGHT_UNTIL_FILE="$TMP_DIR/light_until"
 
 # Locate fbink binary (PATH or common jailbreak / KOReader locations)
 FBINK=""
@@ -217,7 +219,11 @@ cleanup() {
     if command -v lipc-set-prop >/dev/null 2>&1; then
         lipc-set-prop com.lab126.powerd preventScreenSaver 0 2>/dev/null || true
     fi
-    rm -f "$PID_FILE" "$DIRTY_FLAG" "$EXIT_FLAG" "$IMG_FILE.tmp"
+    if [ -f "$SLEEP_FLAG" ]; then
+        RESTORE_B="$(cat "$SLEEP_FLAG" 2>/dev/null || echo 8)"
+        set_brightness "${RESTORE_B:-8}"
+    fi
+    rm -f "$PID_FILE" "$DIRTY_FLAG" "$EXIT_FLAG" "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE" "$IMG_FILE.tmp"
     if [ -n "$EIPS" ]; then
         "$EIPS" -c >/dev/null 2>&1 || true
     elif [ -n "$FBINK" ]; then
@@ -242,7 +248,7 @@ if [ "$PAUSE_KINDLE_UI" = "1" ]; then
 fi
 
 log "Detected FB=${FB_W}x${FB_H} FBINK=${FBINK:-none} EIPS=${EIPS:-none}"
-rm -f "$DIRTY_FLAG" "$EXIT_FLAG"
+rm -f "$DIRTY_FLAG" "$EXIT_FLAG" "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE"
 
 # Background touch listener: forwards taps to Pi and sets DIRTY_FLAG for immediate redraw
 export TOUCH_MAX_X="${TOUCH_MAX_X:-0}"
@@ -283,6 +289,25 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
             fi
         fi
 
+        # Sleep mode nightlight logic:
+        # - If light is OFF, first touch ONLY turns light ON for 15s (no accidental clicks in the dark)
+        # - If light is ON, reset the 15s timer and process the tap normally
+        if [ -f "$SLEEP_FLAG" ]; then
+            NOW="$(date +%s)"
+            UNTIL="$(cat "$LIGHT_UNTIL_FILE" 2>/dev/null || echo 0)"
+            UNTIL="${UNTIL:-0}"
+            if [ "$NOW" -ge "$UNTIL" ]; then
+                WAKE_LVL="$(cat "$SLEEP_FLAG" 2>/dev/null || echo 6)"
+                WAKE_LVL="${WAKE_LVL:-6}"
+                set_brightness "$WAKE_LVL"
+                echo $((NOW + 15)) > "$LIGHT_UNTIL_FILE"
+                log "Sleep mode: woke frontlight ($WAKE_LVL) for 15s"
+                continue
+            else
+                echo $((NOW + 15)) > "$LIGHT_UNTIL_FILE"
+            fi
+        fi
+
         read_battery
         RESP="$(http_send_tap "${PI_URL}/api/tap?x=${TX}&y=${TY}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}")"
         log "tap ($TX,$TY) -> ${RESP:-EMPTY}"
@@ -291,10 +316,23 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
             : > "$EXIT_FLAG"
             break
         fi
-        NEW_BRIGHT="$(echo "$RESP" | sed -n 's/.*"brightness": *\([0-9][0-9]*\).*/\1/p')"
-        if [ -n "$NEW_BRIGHT" ]; then
-            log "Setting brightness to $NEW_BRIGHT"
-            set_brightness "$NEW_BRIGHT"
+        if echo "$RESP" | grep -q '"sleep_mode": *true'; then
+            WAKE_LVL="$(echo "$RESP" | sed -n 's/.*"sleep_wake_brightness": *\([0-9][0-9]*\).*/\1/p')"
+            echo "${WAKE_LVL:-6}" > "$SLEEP_FLAG"
+            echo "0" > "$LIGHT_UNTIL_FILE"
+            set_brightness 0
+            log "Entered sleep mode (frontlight off, wake level=${WAKE_LVL:-6})"
+        elif echo "$RESP" | grep -q '"sleep_mode": *false'; then
+            rm -f "$SLEEP_FLAG" "$LIGHT_UNTIL_FILE"
+            NEW_BRIGHT="$(echo "$RESP" | sed -n 's/.*"brightness": *\([0-9][0-9]*\).*/\1/p')"
+            [ -n "$NEW_BRIGHT" ] && set_brightness "$NEW_BRIGHT"
+            log "Exited sleep mode (restored brightness=${NEW_BRIGHT:-unchanged})"
+        else
+            NEW_BRIGHT="$(echo "$RESP" | sed -n 's/.*"brightness": *\([0-9][0-9]*\).*/\1/p')"
+            if [ -n "$NEW_BRIGHT" ]; then
+                log "Setting brightness to $NEW_BRIGHT"
+                set_brightness "$NEW_BRIGHT"
+            fi
         fi
         : > "$DIRTY_FLAG"
     done
@@ -345,12 +383,28 @@ while [ ! -f "$EXIT_FLAG" ]; do
         POLL_SEC=6
     fi
 
+    # Helper to check 15s sleep-mode auto-light-off
+    check_sleep_light() {
+        if [ -f "$SLEEP_FLAG" ] && [ -f "$LIGHT_UNTIL_FILE" ]; then
+            UNTIL="$(cat "$LIGHT_UNTIL_FILE" 2>/dev/null || echo 0)"
+            if [ -n "$UNTIL" ] && [ "$UNTIL" -gt 0 ] 2>/dev/null; then
+                NOW="$(date +%s)"
+                if [ "$NOW" -ge "$UNTIL" ]; then
+                    echo "0" > "$LIGHT_UNTIL_FILE"
+                    set_brightness 0
+                    log "Sleep mode: 15s idle, frontlight turned off"
+                fi
+            fi
+        fi
+    }
+
     # Wait up to POLL_SEC seconds, waking immediately (<250ms) on any touch event
     if [ "$HAS_USLEEP" = "1" ]; then
         TICKS=$((POLL_SEC * 4))
         I=0
         while [ "$I" -lt "$TICKS" ]; do
             [ -f "$EXIT_FLAG" ] && break
+            check_sleep_light
             if [ -f "$DIRTY_FLAG" ]; then
                 rm -f "$DIRTY_FLAG"
                 break
@@ -362,6 +416,7 @@ while [ ! -f "$EXIT_FLAG" ]; do
         I=0
         while [ "$I" -lt "$POLL_SEC" ]; do
             [ -f "$EXIT_FLAG" ] && break
+            check_sleep_light
             if [ -f "$DIRTY_FLAG" ]; then
                 rm -f "$DIRTY_FLAG"
                 break

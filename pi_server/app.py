@@ -81,7 +81,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             height=req_h,
             rotation_cw=rot,
         )
-        if state.view == ViewMode.IDLE_CLOCK:
+        if state.view == ViewMode.SLEEP:
+            poll_sec = 10 if state.playback.is_playing else 30
+        elif state.view == ViewMode.IDLE_CLOCK:
             poll_sec = 30
         elif state.view == ViewMode.NOW_PLAYING and state.playback.is_playing:
             poll_sec = 2
@@ -97,6 +99,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 "X-DeskBuddy-Refresh": "full" if full_refresh else "partial",
                 "X-DeskBuddy-Poll": str(poll_sec),
                 "X-DeskBuddy-View": state.view.value,
+                "X-DeskBuddy-Sleep": "1" if state.view == ViewMode.SLEEP else "0",
             },
         )
 

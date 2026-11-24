@@ -22,6 +22,7 @@ class ViewMode(str, Enum):
     QUEUE = "queue"
     DEVICES = "devices"
     BRIGHTNESS = "brightness"
+    SLEEP = "sleep"
 
 
 class BrowseTab(str, Enum):
@@ -92,6 +93,7 @@ class DeskBuddyState:
         self.kindle_charging: bool = False
         self.last_battery_at: float = 0.0
         self.kindle_brightness: int = 12  # Kindle frontlight scale 0..24
+        self.saved_brightness: int = 12
         self.brightness_dirty: bool = False
 
         self.status_banner: str = ""
@@ -167,7 +169,7 @@ class DeskBuddyState:
                 self.last_playing_at = now
                 if self.view == ViewMode.IDLE_CLOCK:
                     self._set_view(ViewMode.NOW_PLAYING)
-            else:
+            elif self.view != ViewMode.SLEEP:
                 idle_elapsed = now - self.last_playing_at
                 interaction_elapsed = now - self.last_interaction_at
                 # If Spotify lost all active devices (after a brief grace period for freshly started playback),
@@ -275,6 +277,10 @@ class DeskBuddyState:
             }
             if "brightness" in result:
                 res_dict["brightness"] = result["brightness"]
+            if "sleep_mode" in result:
+                res_dict["sleep_mode"] = result["sleep_mode"]
+            if "sleep_wake_brightness" in result:
+                res_dict["sleep_wake_brightness"] = result["sleep_wake_brightness"]
             return res_dict
 
     def _execute_action(
@@ -286,6 +292,31 @@ class DeskBuddyState:
     ) -> dict[str, Any]:
         if action == "exit":
             return {"ok": True, "exit": True, "message": "Exiting Desk Buddy"}
+
+        if action == "toggle_sleep":
+            if self.view == ViewMode.SLEEP:
+                restore = self.saved_brightness
+                self.kindle_brightness = restore
+                target = ViewMode.NOW_PLAYING if self.playback.is_playing else ViewMode.IDLE_CLOCK
+                self._set_view(target)
+                return {
+                    "ok": True,
+                    "sleep_mode": False,
+                    "brightness": restore,
+                    "message": "Sleep mode off",
+                }
+            self.saved_brightness = self.kindle_brightness
+            wake_level = self.saved_brightness if self.saved_brightness > 0 else 6
+            self.kindle_brightness = 0
+            self.previous_view = self.view
+            self._set_view(ViewMode.SLEEP)
+            return {
+                "ok": True,
+                "sleep_mode": True,
+                "sleep_wake_brightness": wake_level,
+                "brightness": 0,
+                "message": "Sleep mode on",
+            }
 
         if action == "toggle_brightness":
             if self.view == ViewMode.BRIGHTNESS:
