@@ -180,14 +180,35 @@ set_brightness() {
     fi
 }
 
+reconnect_wifi() {
+    FORCE_BOUNCE="${1:-0}"
+    if ! command -v lipc-set-prop >/dev/null 2>&1; then
+        return
+    fi
+    WSTATE="$(lipc-get-prop com.lab126.wifid cmState 2>/dev/null || echo unknown)"
+    log "Wi-Fi check: cmState=${WSTATE} force_bounce=${FORCE_BOUNCE}"
+    if [ "$FORCE_BOUNCE" = "1" ] || [ "$WSTATE" != "CONNECTED" ]; then
+        if [ "$FORCE_BOUNCE" = "1" ]; then
+            lipc-set-prop com.lab126.wifid enable 0 >/dev/null 2>&1 || true
+            sleep 2
+        fi
+        lipc-set-prop com.lab126.wifid enable 1 >/dev/null 2>&1 || true
+        lipc-set-prop com.lab126.cmd ensureConnection flag >/dev/null 2>&1 || true
+    fi
+}
+
 http_get_screen() {
     URL="$1"
+    ERR_DEST="$LOG_FILE"
+    if [ "${FAIL_COUNT:-0}" -ge 5 ] && [ $((FAIL_COUNT % 10)) -ne 0 ]; then
+        ERR_DEST="/dev/null"
+    fi
     if command -v curl >/dev/null 2>&1; then
-        curl -fsS --max-time 8 -D "$HDR_FILE" -o "$IMG_FILE.tmp" "$URL" 2>>"$LOG_FILE"
+        curl -fsS --max-time 8 -D "$HDR_FILE" -o "$IMG_FILE.tmp" "$URL" 2>>"$ERR_DEST"
         return $?
     elif command -v wget >/dev/null 2>&1; then
         : > "$HDR_FILE"
-        wget -q -T 8 -O "$IMG_FILE.tmp" "$URL" 2>>"$LOG_FILE"
+        wget -q -T 8 -O "$IMG_FILE.tmp" "$URL" 2>>"$ERR_DEST"
         return $?
     fi
     log "ERROR: neither curl nor wget found"
@@ -268,29 +289,35 @@ export TOUCH_INVERT_Y="${TOUCH_INVERT_Y:-0}"
         [ -z "$TX" ] && continue
 
         # Failsafe local exit (works even if Pi is offline or returning errors):
-        # Double-tap the top-right 'X' corner of the landscape screen within 3 seconds.
+        # Double-tap the top-right corner (either landscape 'X' corner OR portrait top-right
+        # corner matching the fbink error screen) within 4 seconds.
         IN_EXIT_CORNER="0"
-        if [ "$ROTATION" = "90" ] && [ "$TX" -gt $((FB_W - 90)) ] && [ "$TY" -gt $((FB_H - 90)) ]; then
+        if [ "$TX" -gt $((FB_W - 110)) ] && [ "$TY" -lt 110 ]; then
+            # Portrait top-right corner (matches fbink offline notice)
             IN_EXIT_CORNER="1"
-        elif [ "$ROTATION" = "270" ] && [ "$TX" -lt 90 ] && [ "$TY" -lt 90 ]; then
+        elif [ "$ROTATION" = "90" ] && [ "$TX" -gt $((FB_W - 110)) ] && [ "$TY" -gt $((FB_H - 110)) ]; then
+            # Landscape top-right 'X' corner (USB on right)
             IN_EXIT_CORNER="1"
-        elif [ "$ROTATION" = "0" ] && [ "$TX" -gt $((FB_W - 90)) ] && [ "$TY" -lt 90 ]; then
+        elif [ "$ROTATION" = "270" ] && [ "$TX" -lt 110 ] && [ "$TY" -lt 110 ]; then
+            # Landscape top-right 'X' corner (USB on left)
             IN_EXIT_CORNER="1"
         fi
 
         if [ "$IN_EXIT_CORNER" = "1" ]; then
             NOW="$(date +%s)"
-            if [ $((NOW - EXIT_START)) -gt 3 ]; then
+            if [ $((NOW - EXIT_START)) -gt 4 ]; then
                 EXIT_TAPS=1
                 EXIT_START="$NOW"
             else
                 EXIT_TAPS=$((EXIT_TAPS + 1))
             fi
             if [ "$EXIT_TAPS" -ge 2 ]; then
-                log "Local failsafe double-tap exit triggered"
+                log "Local failsafe double-tap exit triggered at ($TX,$TY)"
                 : > "$EXIT_FLAG"
                 break
             fi
+        else
+            EXIT_TAPS=0
         fi
 
         # Sleep mode nightlight logic:
@@ -368,6 +395,11 @@ while [ ! -f "$EXIT_FLAG" ]; do
     SCREEN_URL="${PI_URL}/api/screen.png?w=${FB_W}&h=${FB_H}&rotate=${ROTATION}&battery=${BATT}&charging=${CHG}${BRIGHT_PARAM}"
 
     if http_get_screen "$SCREEN_URL"; then
+        if [ "$FAIL_COUNT" -ge 2 ]; then
+            log "Connection to Pi restored after $FAIL_COUNT failures"
+            LAST_HASH=""
+            PARTIAL_COUNT="$FULL_REFRESH_EVERY"
+        fi
         FAIL_COUNT=0
         mv -f "$IMG_FILE.tmp" "$IMG_FILE"
         NEW_HASH="$(grep -i '^X-DeskBuddy-Hash:' "$HDR_FILE" 2>/dev/null | awk '{print $2}' | tr -d '\r\n')"
@@ -387,12 +419,23 @@ while [ ! -f "$EXIT_FLAG" ]; do
         fi
     else
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        log "HTTP fetch failed ($FAIL_COUNT) for $SCREEN_URL"
-        if [ "$FAIL_COUNT" -eq 2 ] && [ -n "$FBINK" ]; then
-            "$FBINK" -q -c -f >/dev/null 2>&1 || true
-            "$FBINK" -q -y 3 "Desk Buddy: Cannot reach Pi" >/dev/null 2>&1 || true
-            "$FBINK" -q -y 5 "URL: ${PI_URL}" >/dev/null 2>&1 || true
-            "$FBINK" -q -y 8 "Double-tap top-right corner to exit" >/dev/null 2>&1 || true
+        if [ "$FAIL_COUNT" -le 5 ] || [ $((FAIL_COUNT % 10)) -eq 0 ]; then
+            log "HTTP fetch failed ($FAIL_COUNT) for $SCREEN_URL"
+        fi
+        if [ "$FAIL_COUNT" -eq 2 ]; then
+            LAST_HASH=""
+            if [ -n "$FBINK" ]; then
+                "$FBINK" -q -c -f >/dev/null 2>&1 || true
+                "$FBINK" -q -y 3 "Desk Buddy: Cannot reach Pi" >/dev/null 2>&1 || true
+                "$FBINK" -q -y 5 "URL: ${PI_URL}" >/dev/null 2>&1 || true
+                "$FBINK" -q -y 7 "Retrying & reconnecting Wi-Fi..." >/dev/null 2>&1 || true
+                "$FBINK" -q -y 9 "Double-tap top-right corner to exit" >/dev/null 2>&1 || true
+            fi
+        fi
+        if [ "$FAIL_COUNT" -eq 3 ] || [ $((FAIL_COUNT % 10)) -eq 3 ]; then
+            reconnect_wifi 0
+        elif [ $((FAIL_COUNT % 20)) -eq 15 ]; then
+            reconnect_wifi 1
         fi
         POLL_SEC=6
     fi
